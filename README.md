@@ -1,4 +1,4 @@
-# Drug-Disease Association Prediction with Graph Neural Networks
+# Drug-Disease Association Prediction with Graph Neural Network (DREAM-GNN)
 
 This project implements a drug-disease association prediction model using Graph Convolutional Networks (GCN) with advanced data augmentation techniques.
 
