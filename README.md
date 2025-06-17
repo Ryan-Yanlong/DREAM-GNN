@@ -53,18 +53,6 @@ python train.py --data_name lrssl --device 0
 - `--use_augmentation`: Enable data augmentation
 - `--save_model`: Save best model
 
-### Ablation Study
-
-Run ablation experiments to test different configurations:
-
-```bash
-python ablation.py --data_name lrssl --device 0
-```
-
-The ablation study tests various model configurations including:
-- Different model sizes (larger hidden dimensions)
-- More GCN layers
-- With/without data augmentation
 
 ## Model Architecture
 
