@@ -26,10 +26,6 @@ The model predicts novel drug-disease associations by learning from known associ
 - Python 3.7+
 - PyTorch 1.8+
 - DGL (Deep Graph Library)
-- NumPy
-- Pandas
-- SciPy
-- scikit-learn
 
 ## Usage
 
@@ -78,6 +74,4 @@ Input data should be in MATLAB (.mat) format containing:
 - Best metrics: `best_metric{fold_id}.csv`
 - Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
 
-## Citation
 
-If you use this code, please cite the relevant papers on drug-disease association prediction using graph neural networks.
