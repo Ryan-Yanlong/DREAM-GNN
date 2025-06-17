@@ -1,90 +1,95 @@
-# AdaDR: Adaptive Drug-Disease Association Prediction
+# Drug-Disease Association Prediction with Graph Neural Networks
 
-[![DGL](https://img.shields.io/badge/DGL-0.8+-green.svg)](https://www.dgl.ai/)
+This project implements a drug-disease association prediction model using Graph Convolutional Networks (GCN) with advanced data augmentation techniques.
 
-A deep learning framework for drug-disease association prediction using graph neural networks with data augmentation and multiple similarity graphs.
+## Overview
 
-## 🔬 Overview
+The model predicts novel drug-disease associations by learning from known associations and similarity information. It employs a dual-channel architecture combining:
+- Topology-based Graph Convolutional Matrix Completion (GCMC) layers
+- Feature-based Graph Convolutional Networks (FGCN)
+- Attention-based fusion mechanism
+- Various data augmentation strategies
 
-AdaDR predicts potential drug-disease associations by leveraging:
-- **Multi-Graph Learning**: Drug similarity, disease similarity, and feature-based graphs
-- **Data Augmentation**: Edge dropout, feature noise, graph perturbations
-- **Cross-Validation**: 10-fold CV for robust evaluation
-- **Novel Prediction**: Identifies top-k novel drug-disease pairs
+## Files Description
 
-## 📋 Requirements
+- `data_loader.py`: Handles data loading, preprocessing, and cross-validation splits
+- `model.py`: Defines the neural network architecture
+- `layers.py`: Contains custom layer implementations (GCMC, GCN, Attention, Decoder)
+- `train.py`: Main training script with seed-based experiments
+- `ablation.py`: Ablation study script for hyperparameter analysis
+- `evaluation.py`: Model evaluation metrics (AUROC, AUPR)
+- `augmentation.py`: Graph data augmentation techniques
+- `utils.py`: Utility functions for graph processing and logging
 
-```bash
-pip install torch>=1.8.0
-pip install dgl>=0.8.0
-pip install numpy pandas scikit-learn scipy
-```
+## Requirements
 
-## 🚀 Quick Start
+- Python 3.7+
+- PyTorch 1.8+
+- DGL (Deep Graph Library)
+- NumPy
+- Pandas
+- SciPy
+- scikit-learn
+
+## Usage
 
 ### Basic Training
+
+Run training with default parameters:
+
 ```bash
-python main_train.py --data_name lrssl --device 0
+python train.py --data_name lrssl --device 0
 ```
+
+### Key Parameters
+
+- `--data_name`: Dataset name (lrssl, Gdataset, Cdataset)
+- `--device`: GPU device ID (-1 for CPU)
+- `--layers`: Number of GCN layers (default: 3)
+- `--gcn_out_units`: GCN output dimensions (default: 128)
+- `--dropout`: Dropout rate (default: 0.3)
+- `--train_lr`: Learning rate (default: 0.002)
+- `--train_max_iter`: Maximum training iterations (default: 18000)
+- `--use_augmentation`: Enable data augmentation
+- `--save_model`: Save best model
 
 ### Ablation Study
+
+Run ablation experiments to test different configurations:
+
 ```bash
-python ablation_study.py
+python ablation.py --data_name lrssl --device 0
 ```
 
-## 📁 Project Structure
+The ablation study tests various model configurations including:
+- Different model sizes (larger hidden dimensions)
+- More GCN layers
+- With/without data augmentation
 
-```
-├── main_train.py          # Main training script
-├── ablation_study.py      # Comprehensive ablation experiments
-├── data_loader.py         # Data loading and preprocessing
-├── model.py              # Neural network architectures
-├── layers.py             # Custom GNN layers
-├── evaluation.py         # Model evaluation metrics
-├── augmentation.py       # Data augmentation techniques
-├── utils.py              # Utility functions
-├── run_experiments.sh    # Batch experiment runner
-└── README.md            # This file
-```
+## Model Architecture
 
-## 🎯 Datasets
+1. **GCMC Module**: Processes drug-disease interaction graph with relation-specific transformations
+2. **FGCN Module**: Processes drug and disease similarity graphs separately
+3. **Attention Fusion**: Combines topology and feature representations
+4. **MLP Decoder**: Predicts association scores
 
-Place your datasets in `./raw_data/drug_data/`:
-- **Gdataset**: `Gdataset/Gdataset.mat`
-- **Cdataset**: `Cdataset/Cdataset.mat`  
-- **LRSSL**: `lrssl/lrssl.mat`
+## Data Format
 
-Expected `.mat` file structure:
-```matlab
-didr          % Drug-disease association matrix
-drug          % Drug similarity matrix
-disease       % Disease similarity matrix
-drug_embed    % Pre-trained drug embeddings (optional)
-disease_embed % Pre-trained disease embeddings (optional)
-Wrname        % Drug names (optional)
-```
+Input data should be in MATLAB (.mat) format containing:
+- `didr`: Drug-disease association matrix
+- `drug`: Drug similarity matrix
+- `disease`: Disease similarity matrix
+- `drug_embed`: Drug feature embeddings
+- `disease_embed`: Disease feature embeddings
+- `Wrname`: Drug identifiers (optional)
 
-## 📈 Output
+## Output
 
-### Training Results
-- `fold_metrics.csv`: Per-fold AUROC/AUPR scores
-- `best_model_fold{X}.pth`: Best model for each fold
-- `test_metric{X}.csv`: Training progress logs
+- Model checkpoints: `best_model_fold{fold_id}.pth`
+- Metrics logs: `test_metric{fold_id}.csv`
+- Best metrics: `best_metric{fold_id}.csv`
+- Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
 
-### Novel Predictions
-- `top{K}_novel_predictions_fold{X}.csv`: Top-K predictions per fold
-- `combined_top_predictions.csv`: Aggregated predictions across folds
+## Citation
 
-
-**Key Components:**
-- **GCMC Layers**: Handle drug-disease bipartite graphs
-- **Feature GCNs**: Process similarity-based graphs
-- **Attention Fusion**: Combines multiple representations
-- **MLP Decoder**: Predicts association probabilities
-
-
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
+If you use this code, please cite the relevant papers on drug-disease association prediction using graph neural networks.
