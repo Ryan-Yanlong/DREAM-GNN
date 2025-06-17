@@ -47,7 +47,7 @@ class GCMCLayer(nn.Module):
         self.share_user_item_param = share_user_item_param 
         self.user_in_units = user_in_units
 
-        # 先计算有效消息维度
+        # First calculate effective message dimension
         effective_msg_units = msg_units
         if agg == 'stack':
             assert effective_msg_units % len(rating_vals) == 0
@@ -56,7 +56,7 @@ class GCMCLayer(nn.Module):
             effective_msg_units = effective_msg_units // 3 
         self.msg_units = effective_msg_units
 
-        # 构造线性映射层，输入特征数为 effective_msg_units
+        # Construct linear mapping layer with effective_msg_units as input features
         self.ufc = nn.Linear(effective_msg_units, out_units)  
         if share_user_item_param:
             self.ifc = self.ufc
@@ -100,10 +100,8 @@ class GCMCLayer(nn.Module):
         self.device = device
         self.reset_parameters()
 
-
-
     def partial_to(self, device):
-        """将除 W_r 外的参数转移到指定设备"""
+        """Move parameters except W_r to specified device"""
         assert device == self.device
         if device is not None:
             self.ufc.cuda(device)
@@ -132,7 +130,7 @@ class GCMCLayer(nn.Module):
             drug_feat = out_feats['drug']
             dis_feat = out_feats['disease']
 
-            # 激活和 dropout
+            # Activation and dropout
             drug_feat = self.agg_act(drug_feat)
             drug_feat = self.dropout(drug_feat)
 
@@ -169,18 +167,18 @@ class GCMCGraphConv(nn.Module):
             init.xavier_uniform_(self.weight)
 
     def forward(self, graph, feat, weight=None, Two_Stage=False):
-        """计算图卷积
+        """Compute graph convolution
 
-        使用局部作用域防止数据污染。
+        Use local scope to prevent data contamination.
         """
         with graph.local_scope():
             if isinstance(feat, tuple):
-                feat, _ = feat  # dst feature 未使用
-            # 确保输入 feat 在指定设备上（如果有指定 device）
+                feat, _ = feat  # dst feature not used
+            # Ensure input feat is on specified device (if device is specified)
             if self.device is not None:
                 feat = feat.to(self.device)
             
-            # 获取 cj 和 ci
+            # Get cj and ci
             cj = graph.srcdata['cj']
             ci = graph.dstdata['ci']
             
@@ -188,46 +186,46 @@ class GCMCGraphConv(nn.Module):
                 cj = cj.to(self.device)
                 ci = ci.to(self.device)
                 
-            # 检查并处理大小不匹配
+            # Check and handle size mismatch
             num_src_nodes = graph.number_of_src_nodes()
             
-            # 确保 feat 和 cj 大小匹配
+            # Ensure feat and cj size match
             if feat.size(0) != num_src_nodes:
-                print(f"警告: feat 大小 ({feat.size(0)}) 与源节点数 ({num_src_nodes}) 不匹配")
-                # 如果 feat 太大，截断它
+                print(f"Warning: feat size ({feat.size(0)}) doesn't match source node count ({num_src_nodes})")
+                # If feat is too big, truncate it
                 if feat.size(0) > num_src_nodes:
                     feat = feat[:num_src_nodes]
-                # 如果 feat 太小，填充它（通过复制最后一行）
+                # If feat is too small, pad it (by repeating last row)
                 else:
                     padding = feat[-1].unsqueeze(0).repeat(num_src_nodes - feat.size(0), 1)
                     feat = th.cat([feat, padding], dim=0)
             
-            # 确保 cj 大小与 feat 匹配
+            # Ensure cj size matches feat
             if cj.size(0) != feat.size(0):
-                print(f"警告: cj 大小 ({cj.size(0)}) 与 feat 大小 ({feat.size(0)}) 不匹配")
-                # 如果 cj 太大，截断它
+                print(f"Warning: cj size ({cj.size(0)}) doesn't match feat size ({feat.size(0)})")
+                # If cj is too big, truncate it
                 if cj.size(0) > feat.size(0):
                     cj = cj[:feat.size(0)]
-                # 如果 cj 太小，填充它
+                # If cj is too small, pad it
                 else:
                     padding = th.ones(feat.size(0) - cj.size(0), 1, device=cj.device)
                     cj = th.cat([cj, padding], dim=0)
             
             if weight is not None:
                 if self.weight is not None:
-                    raise dgl.DGLError('提供了外部 weight，但模块自身也定义了 weight 参数，请设置 weight=False。')
+                    raise dgl.DGLError('External weight provided but module also has its own weight parameter, please set weight=False.')
             else:
                 weight = self.weight
 
             if weight is not None:
                 feat = dot_or_identity(feat, weight, self.device)
 
-            # 此处确保 dropout(cj) 与 feat 在同一设备和大小
+            # Ensure dropout(cj) has same device and size as feat
             cj_dropout = self.dropout(cj).view(-1, 1)
             feat = feat * cj_dropout
             
             graph.srcdata['h'] = feat
-            # 使用新版 API：copy_u 而非 copy_src
+            # Use new API: copy_u instead of copy_src
             graph.update_all(
                 fn.copy_u('h', 'm'),
                 fn.sum('m', 'h')
@@ -274,11 +272,10 @@ class FGCN(nn.Module):
             fused_drug = th.relu(self.drug_fusion(th.cat([emb1_sim, emb1_feat], dim=1)))
             fused_disease = th.relu(self.disease_fusion(th.cat([emb2_sim, emb2_feat], dim=1)))
 
-            # --- ADD DROPOUT HERE ---
+            # Add dropout
             # Use self.training to ensure dropout is only active during training
             emb1 = F.dropout(fused_drug, p=self.dropout, training=self.training)
             emb2 = F.dropout(fused_disease, p=self.dropout, training=self.training)
-            # --- END OF CHANGE ---
 
         else:
             # If only one type of graph, no fusion dropout needed, just pass through
@@ -286,8 +283,9 @@ class FGCN(nn.Module):
 
         # Return all embeddings, including intermediate ones if they exist
         return emb1, emb2, emb1_sim, emb1_feat, emb2_sim, emb2_feat
+
 class GraphConvolution(nn.Module):
-    """简单的 GCN 层"""
+    """Simple GCN layer"""
     def __init__(self, in_features, out_features, bias=True):
         super(GraphConvolution, self).__init__()
         self.in_features = in_features
@@ -306,9 +304,9 @@ class GraphConvolution(nn.Module):
             self.bias.data.uniform_(-stdv, stdv)
 
     def forward(self, input, adj):
-        devie = input.device
-        if adj.device != devie:
-            adj = adj.to(devie)
+        device = input.device
+        if adj.device != device:
+            adj = adj.to(device)
             
         support = th.mm(input, self.weight)
         output = th.spmm(adj, support)
@@ -323,27 +321,6 @@ class GraphConvolution(nn.Module):
                + str(self.out_features) + ')'
 
 
-class GatedMultimodalLayer(nn.Module):
-    """基于 'Gated multimodal networks, Arevalo et al.' 的门控多模态层"""
-    def __init__(self, size_in1, size_in2, size_out=16):
-        super(GatedMultimodalLayer, self).__init__()
-        self.size_in1, self.size_in2, self.size_out = size_in1, size_in2, size_out
-        
-        self.hidden1 = nn.Linear(size_in1, size_out, bias=False)
-        self.hidden2 = nn.Linear(size_in2, size_out, bias=False)
-        self.hidden_sigmoid = nn.Linear(size_out*2, 1, bias=False)
-
-        self.tanh_f = nn.ReLU()
-        self.sigmoid_f = nn.Sigmoid()
-
-    def forward(self, x1, x2):
-        h1 = self.tanh_f(self.hidden1(x1))
-        h2 = self.tanh_f(self.hidden2(x2))
-        x = th.cat((h1, h2), dim=1)
-        z = self.sigmoid_f(self.hidden_sigmoid(x))
-        return z.view(z.size()[0],1)*h1 + (1-z).view(z.size()[0],1)*h2
-    
-
 class Attention(nn.Module):
     def __init__(self, in_size, hidden_size=16, dropout_rate=0.1):
         super(Attention, self).__init__()
@@ -357,7 +334,7 @@ class Attention(nn.Module):
     def forward(self, z):
         w = self.project(z)
         beta = th.softmax(w, dim=1)
-        beta = self.dropout(beta)  # 添加 Dropout
+        beta = self.dropout(beta)  # Add Dropout
         return (beta * z).sum(1), beta
 
 
@@ -380,7 +357,6 @@ class MLPDecoder(nn.Module):
         self.lin2.reset_parameters()
         self.lin3.reset_parameters()
 
-
     def forward(self, graph, drug_feat, dis_feat):
         with graph.local_scope():
             graph.nodes['drug'].data['h'] = drug_feat
@@ -399,10 +375,6 @@ class MLPDecoder(nn.Module):
         return out
     
 
-def udf_u_mul_e_norm(edges):
-    return {'reg': edges.src['reg'] * edges.dst['ci']}
-
-
 def udf_u_mul_e(edges):
     return {'m': th.cat([edges.src['h'], edges.dst['h']], 1)}
 
@@ -416,5 +388,5 @@ def dot_or_identity(A, B, device=None):
         else:
             return th.cat([B[A[:, 0].long()], B[A[:, 1].long()], B[A[:, 2].long()]], 1).to(device)
     else:
-        # 对于 dense embedding 情况，执行线性变换
+        # For dense embedding case, perform linear transformation
         return th.matmul(A, B)
