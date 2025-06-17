@@ -81,7 +81,7 @@ Input data should be in MATLAB (.mat) format containing:
 - `disease`: Disease similarity matrix
 - `drug_embed`: Drug feature embeddings
 - `disease_embed`: Disease feature embeddings
-- `Wrname`: Drug identifiers (optional)
+- `Wrname`: Drug identifiers
 
 ## Output
 
