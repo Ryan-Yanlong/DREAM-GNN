@@ -10,6 +10,20 @@ The model predicts novel drug-disease associations by learning from known associ
 - Attention-based fusion mechanism
 - Various data augmentation strategies
 
+
+## 🔗 Pretrained Resources Used for Feature Initialisation
+
+| Resource | Purpose in DREAM-GNN | Link |
+| -------- | ------------------- | ---- |
+| **ChemBERTa (77 M MLM)** | 768-dim SMILES embeddings for small-molecule drugs | [`DeepChem/ChemBERTa-77M-MLM`](https://huggingface.co/DeepChem/ChemBERTa-77M-MLM) :contentReference[oaicite:0]{index=0} |
+| **ESM-2 (3 B, UR50D)** | 2560-dim protein sequence embeddings for biologics | [`facebook/esm2_t36_3B_UR50D`](https://huggingface.co/facebook/esm2_t36_3B_UR50D) :contentReference[oaicite:1]{index=1} |
+| **BioBERT (v1.1)** | 1024-dim biomedical text embeddings for disease terms | [`dmis-lab/biobert-v1.1`](https://huggingface.co/dmis-lab/biobert-v1.1) :contentReference[oaicite:2]{index=2} |
+| **DrugBank** | Curated drug metadata & identifiers | [DrugBank Online](https://go.drugbank.com/) :contentReference[oaicite:3]{index=3} |
+| **OMIM** | Curated disease phenotype information | [omim.org](https://www.ncbi.nlm.nih.gov/omim) :contentReference[oaicite:4]{index=4} |
+
+---
+
+
 ## Files Description
 
 - `data_loader.py`: Handles data loading, preprocessing, and cross-validation splits
