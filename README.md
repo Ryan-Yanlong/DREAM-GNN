@@ -15,9 +15,9 @@ The model predicts novel drug-disease associations by learning from known associ
 
 | Resource | Purpose in DREAM-GNN | Link |
 | -------- | ------------------- | ---- |
-| **ChemBERTa (77 M MLM)** | 768-dim SMILES embeddings for small-molecule drugs | [`DeepChem/ChemBERTa-77M-MLM`](https://huggingface.co/DeepChem/ChemBERTa-77M-MLM) :contentReference[oaicite:0]{index=0} |
-| **ESM-2 (3 B, UR50D)** | 2560-dim protein sequence embeddings for biologics | [`facebook/esm2_t36_3B_UR50D`](https://huggingface.co/facebook/esm2_t36_3B_UR50D) :contentReference[oaicite:1]{index=1} |
-| **BioBERT (v1.1)** | 1024-dim biomedical text embeddings for disease terms | [`dmis-lab/biobert-v1.1`](https://huggingface.co/dmis-lab/biobert-v1.1) :contentReference[oaicite:2]{index=2} |
+| **ChemBERTa (PubChem10M, BPE 450 k)** | 1024-dim SMILES embeddings for small-molecule drugs | [`seyonec/PubChem10M_SMILES_BPE_450k`](https://huggingface.co/seyonec/PubChem10M_SMILES_BPE_450k) :contentReference[oaicite:0]{index=0} |
+| **ESM-2 (650 M, UR50D)** | 1280-dim protein sequence embeddings for biologics | [`facebookresearch/esm2_t33_650M_UR50D`](https://huggingface.co/facebookresearch/esm2_t33_650M_UR50D) :contentReference[oaicite:1]{index=1} |
+| **BioBERT (v1.1 base-cased)** | 768-dim biomedical text embeddings for disease terms | [`dmis-lab/biobert-base-cased-v1.1`](https://huggingface.co/dmis-lab/biobert-base-cased-v1.1) :contentReference[oaicite:2]{index=2} |
 | **DrugBank** | Curated drug metadata & identifiers | [DrugBank Online](https://go.drugbank.com/) :contentReference[oaicite:3]{index=3} |
 | **OMIM** | Curated disease phenotype information | [omim.org](https://www.ncbi.nlm.nih.gov/omim) :contentReference[oaicite:4]{index=4} |
 
