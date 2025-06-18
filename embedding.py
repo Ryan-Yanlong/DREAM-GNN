@@ -1,11 +1,23 @@
+import os
+import random
+import string
+import numpy as np
 import pandas as pd
 import torch
-import numpy as np
 import pickle
+import scipy.io as sio
+import ast
+import difflib
+from tqdm import tqdm
+from sklearn.decomposition import PCA
 from transformers import AutoTokenizer, AutoModel
 from esm import pretrained
-from sklearn.decomposition import PCA
-from tqdm import tqdm  # For displaying progress bars
+
+# Set random seeds for reproducibility
+np.random.seed(42)
+random.seed(42)
+torch.manual_seed(42)
+
 
 class DrugEmbeddingGenerator:
     def __init__(self, device="cpu"):
@@ -13,7 +25,8 @@ class DrugEmbeddingGenerator:
 
         # Initialize ChemBERTa
         print("Initializing ChemBERTa...")
-        token = "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"
+        # Note: You need to provide your own Hugging Face token
+        token = "YOUR_HUGGINGFACE_TOKEN_HERE"  # Replace with your token
         self.smile_tokenizer = AutoTokenizer.from_pretrained(
             "seyonec/PubChem10M_SMILES_BPE_450k",
             use_auth_token=token
@@ -55,7 +68,6 @@ class DrugEmbeddingGenerator:
             embeddings.append(embedding)
 
         if len(embeddings) == 0:
-            # Return empty tensor, will be converted to target dimension later
             return torch.empty(0, self.smile_model.config.hidden_size, device=self.device)
         return torch.stack(embeddings)
 
@@ -64,7 +76,7 @@ class DrugEmbeddingGenerator:
         embeddings = []
         for seq in tqdm(sequence_list, desc="Processing Biotech Sequences"):
             if not isinstance(seq, str) or pd.isna(seq) or seq.strip() == "":
-                # ESM2 base version outputs 1280 dimensions, set to 0
+                # ESM2 base version outputs 1280 dimensions
                 embeddings.append(torch.zeros(1280, device=self.device))
                 continue
 
@@ -84,8 +96,7 @@ class DrugEmbeddingGenerator:
                 results = self.esm_model(tokens, repr_layers=[33])
                 token_reps = results["representations"][33]
 
-            # Remove CLS (token 0) and PAD (assuming length matches seq_cleaned), 
-            # take average of (1: len(seq_cleaned)+1)
+            # Remove CLS and PAD tokens, take average
             seq_embedding = token_reps[0, 1: len(seq_cleaned) + 1].mean(dim=0)
             embeddings.append(seq_embedding)
 
@@ -124,8 +135,7 @@ class DrugEmbeddingGenerator:
     def combine_embeddings(self, df, target_dim=768):
         """
         Generate embeddings separately for small molecule and biotech based on drug_type,
-        then perform dimensionality reduction and combination. The returned order 
-        corresponds one-to-one with the row order of df.
+        then perform dimensionality reduction and combination.
         """
         print("Combining embeddings for all drugs...")
         # Group by type
@@ -137,7 +147,7 @@ class DrugEmbeddingGenerator:
         print("Processing biotech drugs...")
         biotech_emb = self.generate_biotech_embedding(biotech_df["sequence"].tolist())
 
-        # If any group is empty, construct empty tensor with shape (0, original_dim)
+        # Handle empty groups
         if smile_emb.size(0) == 0:
             smile_emb = torch.empty(0, self.smile_model.config.hidden_size, device=self.device)
         if biotech_emb.size(0) == 0:
@@ -178,7 +188,7 @@ class DrugEmbeddingGenerator:
         else:
             biotech_emb_final = torch.empty(0, target_dim, device=self.device)
 
-        # Construct final drug_embeddings, filling according to original DataFrame row order
+        # Construct final drug_embeddings
         drug_embeddings = torch.zeros((len(df), target_dim), device=self.device)
         if smile_emb_final.size(0) > 0:
             drug_embeddings[small_mol_df.index] = smile_emb_final
@@ -188,38 +198,189 @@ class DrugEmbeddingGenerator:
         return drug_embeddings
 
 
-def main(csv_path="drug_info.csv", output_path="drug_embedding.pkl", device="cpu", target_dim=768):
-    print("Reading input CSV file...")
+# Disease embedding functions
+def get_text_embedding(text, tokenizer, model, device):
+    """
+    Generate text embedding using BioBERT with mean pooling
+    """
+    inputs = tokenizer(text, padding=True, truncation=True, max_length=128, return_tensors="pt")
+    input_ids = inputs["input_ids"].to(device)
+    attention_mask = inputs["attention_mask"].to(device)
+    with torch.no_grad():
+        outputs = model(input_ids, attention_mask=attention_mask)
+        last_hidden_state = outputs.last_hidden_state
+    mask_expanded = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+    sum_embeddings = torch.sum(last_hidden_state * mask_expanded, dim=1)
+    sum_mask = torch.clamp(mask_expanded.sum(dim=1), min=1e-9)
+    mean_embeddings = sum_embeddings / sum_mask
+    return mean_embeddings[0]
+
+
+# Utility functions
+def generate_random_drugbank_id():
+    """Generate random drugbank ID"""
+    return "RAND" + ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+def load_mim_titles(file_path):
+    mim_dict = {}
+    with open(file_path, "r", encoding="utf-8") as f:
+        f.readline()  # Skip header
+        for line in f:
+            parts = line.strip().split("\t")
+            if len(parts) >= 3:
+                mim_dict[parts[1].strip()] = parts[2].strip()
+    return mim_dict
+
+
+def clean_disease_code(raw_code):
+    return raw_code.replace("[", "").replace("]", "").replace("'", "").replace('"', "").strip()
+
+
+def code_to_mim_number(code):
+    return code.lstrip("D")
+
+
+def clean_drug_name(raw_name):
+    """Clean drug name string"""
+    try:
+        parsed = ast.literal_eval(raw_name)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return str(parsed[0]).strip()
+    except Exception:
+        pass
+    return raw_name.replace("[", "").replace("]", "").replace("'", "").strip()
+
+
+# Main processing function
+def main():
+    # Configuration
+    device = "cpu"  # or "cuda" if you have GPU
+    target_dim = 768
+    
+    # File paths
+    csv_path = "drug_info.csv"
+    mim_titles_file = "mimTitles.txt"
+    mat_file = "lrssl.mat"
+    drug_emb_output = "drug_embedding.pkl"
+    
+    # Note: You need to provide your own Hugging Face token
+    hf_token = "YOUR_HUGGINGFACE_TOKEN_HERE"  # Replace with your token
+    
+    # Step 1: Generate drug embeddings
+    print("Step 1: Generating drug embeddings...")
     df = pd.read_csv(csv_path, sep=",")
-
-    # Ensure CSV file contains "drugbank_id" column, otherwise KeyError will be raised
+    
     if "drugbank_id" not in df.columns:
-        raise ValueError("'drugbank_id' column not found in CSV file, please verify input file is correct.")
-
+        raise ValueError("'drugbank_id' column not found in CSV file")
+    
     generator = DrugEmbeddingGenerator(device=device)
-
-    print("Starting embedding generation process...")
+    
     with torch.no_grad():
         embeddings = generator.combine_embeddings(df, target_dim=target_dim)
-        # Transfer embedding from GPU back to CPU for subsequent use or storage
         embeddings = embeddings.cpu().numpy()
-
-    print(f"Generated embeddings shape: {embeddings.shape}")
-
-    # Convert result to DataFrame and set drugbank_id as index
-    # Assume row order in df corresponds to embeddings
+    
+    print(f"Generated drug embeddings shape: {embeddings.shape}")
+    
+    # Save drug embeddings
     embedding_df = pd.DataFrame(embeddings, index=df["drugbank_id"].values)
+    embedding_df.to_pickle(drug_emb_output)
+    print(f"Saved drug embeddings to {drug_emb_output}")
+    
+    # Step 2: Process disease embeddings and update MAT file
+    print("\nStep 2: Processing disease embeddings...")
+    
+    # Initialize BioBERT for disease embeddings
+    model_name = "dmis-lab/biobert-base-cased-v1.1"
+    disease_tokenizer = AutoTokenizer.from_pretrained(model_name, token=hf_token)
+    disease_model = AutoModel.from_pretrained(model_name, token=hf_token)
+    disease_model.to(device)
+    disease_model.eval()
+    
+    # Load OMIM titles
+    mim_dict = load_mim_titles(mim_titles_file)
+    
+    # Load MAT file
+    mat_data = sio.loadmat(mat_file)
+    
+    # Process disease embeddings
+    if 'Wdname' not in mat_data:
+        raise Exception("'Wdname' not found in MAT file!")
+    
+    Wdname = mat_data['Wdname']
+    disease_codes = [clean_disease_code(str(Wdname[i, 0])) for i in range(Wdname.shape[0])]
+    
+    embeddings_list = []
+    for code in disease_codes:
+        mim_num = code_to_mim_number(code)
+        text_input = mim_dict.get(mim_num, code)
+        emb = get_text_embedding(text_input, disease_tokenizer, disease_model, device).cpu().numpy()
+        embeddings_list.append(emb)
+    
+    disease_embed = np.vstack(embeddings_list)
+    mat_data["disease_embed"] = disease_embed
+    
+    # Process drug names and map to DrugBank IDs
+    if "Wrname" not in mat_data:
+        raise Exception("'Wrname' not found in MAT file!")
+    
+    drug_names = [clean_drug_name(str(x)) for x in mat_data["Wrname"].flatten()]
+    drug_info_df = pd.read_csv(csv_path)
+    
+    # Build drug name to ID mapping
+    drug_name_to_id = {}
+    for name, db_id in zip(drug_info_df["name"], drug_info_df["drugbank_id"]):
+        name_clean = clean_drug_name(str(name)).lower().strip()
+        if pd.isna(db_id) or not isinstance(db_id, str):
+            new_id = generate_random_drugbank_id()
+        else:
+            new_id = db_id.strip().upper()
+        drug_name_to_id[name_clean] = new_id
+    
+    # Map drug names to IDs with fuzzy matching
+    mapped_drug_info = []
+    for name in drug_names:
+        key = name.lower().strip()
+        if key in drug_name_to_id:
+            mapped_drug_info.append((name, drug_name_to_id[key]))
+        else:
+            close_matches = difflib.get_close_matches(key, list(drug_name_to_id.keys()), n=1, cutoff=0.8)
+            if close_matches:
+                matched = close_matches[0]
+                print(f"Info: '{name}' fuzzy matched to '{matched}', ID: {drug_name_to_id[matched]}")
+                mapped_drug_info.append((name, drug_name_to_id[matched]))
+            else:
+                random_id = generate_random_drugbank_id()
+                print(f"Warning: '{name}' not found, generated random ID: {random_id}")
+                mapped_drug_info.append((name, random_id))
+    
+    mapped_drug_ids = [x[1] for x in mapped_drug_info]
+    mat_data["Wrname"] = np.array(mapped_drug_ids, dtype=object).reshape(-1, 1)
+    
+    # Load pretrained embeddings and map to drugs
+    pretrained_embeddings = pd.read_pickle(drug_emb_output)
+    pretrained_embeddings.index = pretrained_embeddings.index.astype(str).str.strip().str.upper()
+    
+    drug_feats = []
+    for drug_id in mapped_drug_ids:
+        if drug_id and drug_id in pretrained_embeddings.index:
+            feat = pretrained_embeddings.loc[drug_id].values
+        else:
+            feat = np.random.randn(target_dim)
+        drug_feats.append(feat.reshape(1, -1))
+    
+    drug_embed = np.concatenate(drug_feats, axis=0)
+    mat_data["drug_embed"] = drug_embed
+    
+    # Save updated MAT file
+    sio.savemat(mat_file, mat_data)
+    
+    # Print results
+    print(f"\nFinal disease_embed shape: {disease_embed.shape}")
+    print(f"Final drug_embed shape: {drug_embed.shape}")
+    print(f"Final Wrname shape: {mat_data['Wrname'].shape}")
+    print(f"MAT file updated successfully!")
 
-    print(f"Saving embeddings to {output_path}...")
-    # You can choose to use to_pickle or pickle.dump, both have equivalent effects
-    embedding_df.to_pickle(output_path)
-    print("Process completed successfully.")
 
-
-if __name__ == "__main__":
-    main(
-        csv_path="drug_info.csv",
-        output_path="drug_embedding.pkl",
-        device="cpu",
-        target_dim=768
-    )
+if __name__ == '__main__':
+    main()
