@@ -1,15 +1,15 @@
-# Drug-Disease Association Prediction with Graph Neural Network (DREAM-GNN)
-
-This project implements a drug-disease association prediction model using Graph Convolutional Networks (GCN) with advanced data augmentation techniques.
+# DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning
 
 ## Overview
-
-The model predicts novel drug-disease associations by learning from known associations and similarity information. It employs a dual-channel architecture combining:
+This project implements a drug-disease association prediction model using Graph Convolutional Networks (GCN) with advanced data augmentation techniques. The model predicts novel drug-disease associations by learning from known associations and similarity information. It employs a dual-channel architecture combining:
 - Topology-based Graph Convolutional Matrix Completion (GCMC) layers
 - Feature-based Graph Convolutional Networks (FGCN)
 - Attention-based fusion mechanism
 - Various data augmentation strategies
 
+---
+![Main Model Architecture](image/main.png)
+---
 
 ## 🔗 Pretrained Resources Used for Feature Initialisation
 
