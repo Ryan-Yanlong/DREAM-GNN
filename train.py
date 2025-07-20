@@ -400,7 +400,7 @@ def train(args, dataset, cv):
 # load data, perform cross-validation training, etc.
 ###############################################################################
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='AdaDR with Data Augmentation and L2 Regularization')
+    parser = argparse.ArgumentParser(description='DREAM-GNN: Drug REpositioning with Attention Mechanism - Graph Neural Network')
     parser.add_argument('--device', default='0', type=int,
                         help='Run device, e.g. "--device 0", set to --device -1 for CPU')
     parser.add_argument('--save_dir', type=str, help='Log save directory')
