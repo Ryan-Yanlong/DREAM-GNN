@@ -540,8 +540,10 @@ class ColdStartSimulator:
         disease_embs = self.disease_embeddings
         
         # For each cold-start drug, find its real associations in the training data
+        print(f"Processing {len(cold_start_drugs)} cold-start drugs for training data...")
         for i, drug_idx in enumerate(cold_start_drugs):
             drug_emb = aggregated_embeddings[i:i+1]
+            print(f"Processing cold-start drug {drug_idx} ({i+1}/{len(cold_start_drugs)})")
             
             # Find real associations for this drug in the training data
             train_enc_graph = cv_data['train'][0]  # DGL graph object
@@ -550,22 +552,42 @@ class ColdStartSimulator:
             # Find edges where this drug appears
             if hasattr(train_enc_graph, 'edges'):
                 # Get edge indices where this drug is the source
-                # Handle multiple edge types by specifying edge type
-                if train_enc_graph.num_etypes > 1:
-                    # If multiple edge types, use the first one (usually the main edge type)
-                    edge_type = 0
-                    src_nodes = train_enc_graph.edges()[0][edge_type]
-                    dst_nodes = train_enc_graph.edges()[1][edge_type]
-                else:
-                    # Single edge type
-                    src_nodes = train_enc_graph.edges()[0]
-                    dst_nodes = train_enc_graph.edges()[1]
+                # Handle heterogeneous DGL graphs with proper edge type specification
+                try:
+                    # For heterogeneous graphs, we need to specify the edge type
+                    # Try to get the canonical edge types first
+                    if hasattr(train_enc_graph, 'canonical_etypes'):
+                        canonical_etypes = train_enc_graph.canonical_etypes
+                        print(f"  Graph has canonical_etypes: {canonical_etypes}")
+                        if len(canonical_etypes) > 0:
+                            # Use the first edge type (usually the main one)
+                            edge_type = canonical_etypes[0]
+                            src_nodes, dst_nodes = train_enc_graph.edges(etype=edge_type)
+                            print(f"  Using edge type {edge_type}, found {len(src_nodes)} edges")
+                        else:
+                            # Try without specifying edge type for homogeneous graphs
+                            src_nodes, dst_nodes = train_enc_graph.edges()
+                            print(f"  No edge types, found {len(src_nodes)} edges")
+                    else:
+                        # Try without specifying edge type for homogeneous graphs
+                        src_nodes, dst_nodes = train_enc_graph.edges()
+                        print(f"  No canonical_etypes, found {len(src_nodes)} edges")
+                except Exception as e:
+                    print(f"Warning: Could not access edges with edge type: {e}")
+                    # Fallback: try to access edges with 'all' parameter
+                    try:
+                        src_nodes, dst_nodes = train_enc_graph.edges(form='uv')
+                        print(f"  Fallback successful, found {len(src_nodes)} edges")
+                    except Exception as e2:
+                        print(f"Warning: Fallback edge access also failed: {e2}")
+                        continue
                 
                 # Find edges where this drug appears as source
                 drug_edge_mask = (src_nodes == drug_idx)
                 drug_edge_indices = drug_edge_mask.nonzero(as_tuple=True)[0]
                 
                 if len(drug_edge_indices) > 0:
+                    print(f"  Found {len(drug_edge_indices)} edges for drug {drug_idx}")
                     for edge_idx in drug_edge_indices:
                         disease_idx = dst_nodes[edge_idx].item()
                         label = train_gt_ratings[edge_idx].item()
@@ -574,13 +596,19 @@ class ColdStartSimulator:
                         disease_emb = disease_embs[disease_idx:disease_idx+1]
                         combined_emb = th.cat([drug_emb, disease_emb], dim=1)
                         
-                        train_pairs.append(combined_emb)
-                        train_labels.append(label)
+                        # Only add if the combined embedding is valid
+                        if combined_emb.numel() > 0:
+                            train_pairs.append(combined_emb)
+                            train_labels.append(label)
+                else:
+                    print(f"  No edges found for drug {drug_idx}")
             else:
                 print(f"Warning: Unexpected training graph structure for drug {drug_idx}")
-            
+                
             # If no real associations found, create some synthetic ones for training stability
-            if len(train_pairs) == 0 or (len(train_pairs) > 0 and len([p for p in train_pairs if p.shape[0] > 0]) == 0):
+            current_pairs_for_drug = len([p for p in train_pairs if p.shape[0] > 0]) if train_pairs else 0
+            if current_pairs_for_drug == len(train_pairs) - len(cold_start_drugs) + i:  # No new pairs added
+                print(f"  Adding synthetic data for drug {drug_idx}")
                 # Create a few synthetic positive and negative samples
                 num_synthetic = 5
                 positive_diseases = random.sample(range(disease_embs.shape[0]), min(num_synthetic, disease_embs.shape[0]))
@@ -597,11 +625,45 @@ class ColdStartSimulator:
                     combined_emb = th.cat([drug_emb, disease_emb], dim=1)
                     train_pairs.append(combined_emb)
                     train_labels.append(0.0)
+
         
         # Stack all training data
+        print(f"Total training pairs collected: {len(train_pairs)}")
+        print(f"Total training labels collected: {len(train_labels)}")
+        
         if train_pairs:
-            train_pairs = th.cat(train_pairs, dim=0)
-            train_labels = th.FloatTensor(train_labels).to(self.device)
+            # Filter out empty tensors and corresponding labels before concatenation
+            valid_pairs = []
+            valid_labels = []
+            for i, pair in enumerate(train_pairs):
+                if pair.numel() > 0:
+                    valid_pairs.append(pair)
+                    valid_labels.append(train_labels[i])
+            
+            print(f"Valid pairs after filtering: {len(valid_pairs)}")
+            print(f"Valid labels after filtering: {len(valid_labels)}")
+            
+            if valid_pairs:
+                train_pairs = th.cat(valid_pairs, dim=0)
+                train_labels = th.FloatTensor(valid_labels).to(self.device)
+                print(f"Final training data shape: {train_pairs.shape}")
+                print(f"Final training labels shape: {train_labels.shape}")
+            else:
+                print("Warning: No valid training pairs found, using synthetic data")
+                # Create synthetic training data if no valid pairs
+                num_synthetic = 10
+                positive_diseases = random.sample(range(disease_embs.shape[0]), min(num_synthetic, disease_embs.shape[0]))
+                
+                for disease_idx in positive_diseases:
+                    disease_emb = disease_embs[disease_idx:disease_idx+1]
+                    # Use the first cold-start drug for synthetic data
+                    drug_emb = aggregated_embeddings[0:1]
+                    combined_emb = th.cat([drug_emb, disease_emb], dim=1)
+                    train_pairs = [combined_emb]
+                    train_labels = [1.0]
+                
+                train_pairs = th.cat(train_pairs, dim=0)
+                train_labels = th.FloatTensor(train_labels).to(self.device)
             
             # Train cold-start MLP
             criterion = nn.BCEWithLogitsLoss()
@@ -641,16 +703,30 @@ class ColdStartSimulator:
                 # For DGL graphs, we need to access the source nodes
                 if hasattr(test_enc_graph, 'edges'):
                     # Get edge indices where this drug is the source
-                    # Handle multiple edge types by specifying edge type
-                    if test_enc_graph.num_etypes > 1:
-                        # If multiple edge types, use the first one (usually the main edge type)
-                        edge_type = 0
-                        src_nodes = test_enc_graph.edges()[0][edge_type]
-                        dst_nodes = test_enc_graph.edges()[1][edge_type]
-                    else:
-                        # Single edge type
-                        src_nodes = test_enc_graph.edges()[0]
-                        dst_nodes = test_enc_graph.edges()[1]
+                    # Handle heterogeneous DGL graphs with proper edge type specification
+                    try:
+                        # For heterogeneous graphs, we need to specify the edge type
+                        # Try to get the canonical edge types first
+                        if hasattr(test_enc_graph, 'canonical_etypes'):
+                            canonical_etypes = test_enc_graph.canonical_etypes
+                            if len(canonical_etypes) > 0:
+                                # Use the first edge type (usually the main one)
+                                edge_type = canonical_etypes[0]
+                                src_nodes, dst_nodes = test_enc_graph.edges(etype=edge_type)
+                            else:
+                                # Try without specifying edge type for homogeneous graphs
+                                src_nodes, dst_nodes = test_enc_graph.edges()
+                        else:
+                            # Try without specifying edge type for homogeneous graphs
+                            src_nodes, dst_nodes = test_enc_graph.edges()
+                    except Exception as e:
+                        print(f"Warning: Could not access test edges with edge type: {e}")
+                        # Fallback: try to access edges with 'all' parameter
+                        try:
+                            src_nodes, dst_nodes = test_enc_graph.edges(form='uv')
+                        except Exception as e2:
+                            print(f"Warning: Fallback test edge access also failed: {e2}")
+                            continue
                     
                     # Find edges where this cold-start drug appears as source
                     drug_test_edge_mask = (src_nodes == drug_idx)
@@ -932,4 +1008,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
