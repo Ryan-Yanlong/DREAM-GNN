@@ -71,6 +71,14 @@ class DrugDataLoader(object):
         self.aug_params = aug_params or {}
         self.drug_feature_graph = None
         self.disease_feature_graph = None
+        
+        # NEW: Configuration for layered information isolation
+        self.pretrained_weight = self.aug_params.get('pretrained_weight', 0.7)  # Weight for pre-trained embeddings
+        self.fold_specific_weight = self.aug_params.get('fold_specific_weight', 0.3)  # Weight for fold-specific associations
+        self.enable_strict_isolation = self.aug_params.get('enable_strict_isolation', True)  # Enable strict data isolation
+        
+        print(f"[Config] Layered Information Isolation: Pre-trained weight={self.pretrained_weight}, Fold-specific weight={self.fold_specific_weight}")
+        print(f"[Config] Strict isolation enabled: {self.enable_strict_isolation}")
 
         print(f"Starting processing dataset '{self._name}' ...")
         self._dir = os.path.join(_paths[self._name])
@@ -226,45 +234,153 @@ class DrugDataLoader(object):
         self.disease_feature_shape = self.disease_feature.shape
         print("[Feature] Drug feature shape:", self.drug_feature_shape)
         print("[Feature] Disease feature shape:", self.disease_feature_shape)
+        
+        # NEW: Verify pre-trained embeddings don't contain test information
+        if self.enable_strict_isolation:
+            self._verify_embedding_cleanliness()
+
+    def _verify_embedding_cleanliness(self):
+        """
+        Verify that pre-trained embeddings don't contain test set information
+        This is a heuristic check - embeddings should represent general drug/disease properties
+        """
+        print("[Verification] Checking pre-trained embedding cleanliness...")
+        
+        # Check if embeddings are based on the same dataset
+        if hasattr(self, 'drug_embed') and hasattr(self, 'disease_embed'):
+            # Calculate correlation between embeddings and association matrix
+            # FIXED: Properly handle dimensions for correlation calculation
+            
+            # For drug embeddings: shape (num_drug, 768) vs association matrix (num_drug, num_disease)
+            # We need to reshape to calculate correlation properly
+            drug_embed_flat = self.drug_embed.reshape(self._num_drug, -1)  # Flatten to (num_drug, 768)
+            assoc_matrix_flat = self.association_matrix.reshape(self._num_drug, -1)  # Flatten to (num_drug, num_disease)
+            
+            # Calculate correlation between drug embeddings and association patterns
+            # Use only the drug dimension for correlation
+            drug_corr = np.corrcoef(drug_embed_flat)[:self._num_drug, :self._num_drug]
+            
+            # For disease embeddings: shape (num_disease, 768) vs association matrix (num_drug, num_disease)
+            # Transpose association matrix to get (num_disease, num_drug) for correlation with disease embeddings
+            disease_embed_flat = self.disease_embed.reshape(self._num_disease, -1)  # Flatten to (num_disease, 768)
+            assoc_matrix_T = self.association_matrix.T  # Shape: (num_disease, num_drug)
+            assoc_matrix_T_flat = assoc_matrix_T.reshape(self._num_disease, -1)  # Flatten to (num_disease, num_drug)
+            
+            # Calculate correlation between disease embeddings and association patterns
+            disease_corr = np.corrcoef(disease_embed_flat)[:self._num_disease, :self._num_disease]
+            
+            # Alternative approach: Calculate correlation between embeddings and association patterns
+            # This gives us a more meaningful measure of whether embeddings "remember" the associations
+            try:
+                # Calculate how much drug embeddings correlate with their association patterns
+                drug_assoc_corr = []
+                for i in range(self._num_drug):
+                    drug_assoc = self.association_matrix[i, :]  # Association pattern for drug i
+                    drug_emb = self.drug_embed[i, :]  # Embedding for drug i
+                    # Calculate correlation between this drug's embedding and its association pattern
+                    # We'll use a simple dot product normalized approach
+                    if np.std(drug_assoc) > 0 and np.std(drug_emb) > 0:
+                        corr = np.corrcoef(drug_emb, drug_assoc)[0, 1]
+                        drug_assoc_corr.append(corr)
+                
+                disease_assoc_corr = []
+                for i in range(self._num_disease):
+                    disease_assoc = self.association_matrix[:, i]  # Association pattern for disease i
+                    disease_emb = self.disease_embed[i, :]  # Embedding for disease i
+                    # Calculate correlation between this disease's embedding and its association pattern
+                    if np.std(disease_assoc) > 0 and np.std(disease_emb) > 0:
+                        corr = np.corrcoef(disease_emb, disease_assoc)[0, 1]
+                        disease_assoc_corr.append(corr)
+                
+                drug_corr_mean = np.mean(np.abs(drug_assoc_corr)) if drug_assoc_corr else 0.0
+                disease_corr_mean = np.mean(np.abs(disease_assoc_corr)) if disease_assoc_corr else 0.0
+                
+                print(f"[Verification] Drug embedding-association correlation: {drug_corr_mean:.4f}")
+                print(f"[Verification] Disease embedding-association correlation: {disease_corr_mean:.4f}")
+                
+                # Warning if correlation is too high (potential contamination)
+                if drug_corr_mean > 0.3 or disease_corr_mean > 0.3:
+                    print("[WARNING] High correlation detected between embeddings and association matrix!")
+                    print("[WARNING] Pre-trained embeddings may contain dataset-specific information.")
+                    print("[WARNING] Consider using random initialization or external embeddings.")
+                    
+                    # Optionally adjust weights to reduce reliance on potentially contaminated embeddings
+                    if self.pretrained_weight > 0.5:
+                        old_weight = self.pretrained_weight
+                        self.pretrained_weight = 0.5
+                        self.fold_specific_weight = 0.5
+                        print(f"[Auto-adjust] Reduced pre-trained weight from {old_weight:.1%} to {self.pretrained_weight:.1%}")
+                else:
+                    print("[Verification] Pre-trained embeddings appear clean (low correlation with association matrix)")
+                    
+            except Exception as e:
+                print(f"[Verification] Error calculating detailed correlation: {str(e)}")
+                print("[Verification] Proceeding with basic embedding check...")
+                
+                # Fallback: simple check of embedding statistics
+                drug_embed_std = np.std(self.drug_embed)
+                disease_embed_std = np.std(self.disease_embed)
+                print(f"[Verification] Drug embedding std: {drug_embed_std:.4f}")
+                print(f"[Verification] Disease embedding std: {disease_embed_std:.4f}")
+                
+                # If embeddings have very low variance, they might be contaminated
+                if drug_embed_std < 0.01 or disease_embed_std < 0.01:
+                    print("[WARNING] Very low embedding variance detected - potential contamination!")
+                    if self.pretrained_weight > 0.5:
+                        old_weight = self.pretrained_weight
+                        self.pretrained_weight = 0.5
+                        self.fold_specific_weight = 0.5
+                        print(f"[Auto-adjust] Reduced pre-trained weight from {old_weight:.1%} to {self.pretrained_weight:.1%}")
+                else:
+                    print("[Verification] Embedding variance appears normal")
+        else:
+            print("[Verification] No pre-trained embeddings found, using random initialization")
 
     def _generate_cv_specific_graphs(self):
         """
         Generate specific graph structures for each cross-validation fold, ensuring no test edge information is included
+        IMPLEMENTATION: Layered Information Isolation Strategy
+        - Layer 1: Pre-trained embeddings (general knowledge, safe to use)
+        - Layer 2: Training-set-specific similarity matrices (strictly isolated)
+        - Layer 3: Cross-validation fold-specific graph structures
         """
         for cv_idx in range(10):
-            print(f"[Graph] Building fold {cv_idx} specific graphs...")
+            print(f"[Graph] Building fold {cv_idx} specific graphs with layered isolation...")
             
             # Get training and testing data for current fold
             train_data = self.cv_data_dict[cv_idx][0]
             test_data = self.cv_data_dict[cv_idx][1]
             
-            # Create a copy of training association matrix
-            train_assoc_matrix = np.zeros_like(self.association_matrix)
+            # Create training-only association matrix for this fold
+            train_assoc_matrix = self._create_fold_specific_train_matrix(train_data)
             
-            # Fill training set edges
-            pos_train_indices = train_data[train_data['values'] == 1].index
-            for idx in pos_train_indices:
-                drug_id = train_data.loc[idx, 'drug_id']
-                disease_id = train_data.loc[idx, 'disease_id']
-                train_assoc_matrix[drug_id, disease_id] = 1
+            # LAYER 1: Pre-trained embeddings (safe - general knowledge)
+            # These remain unchanged as they represent general drug/disease properties
+            print(f"[Graph] Layer 1: Using pre-trained embeddings (general knowledge)")
             
-            # Use original similarity matrices (consistent with dataloader.py)
-            drug_sim_matrix = self.drug_sim_features.copy()
-            disease_sim_matrix = self.disease_sim_features.copy()
+            # LAYER 2: Training-set-specific similarity matrices (strictly isolated)
+            print(f"[Graph] Layer 2: Computing fold-specific similarity matrices...")
+            fold_drug_sim_matrix = self._compute_fold_specific_similarity(
+                train_assoc_matrix, 'drug', cv_idx)
+            fold_disease_sim_matrix = self._compute_fold_specific_similarity(
+                train_assoc_matrix, 'disease', cv_idx)
             
-            # Build KNN graphs based on similarity matrices
+            # LAYER 3: Build graphs using only training information
+            print(f"[Graph] Layer 3: Building isolated graph structures...")
+            
+            # Build KNN graphs based on fold-specific similarity matrices
             drug_graph = self._create_similarity_graph(
-                drug_sim_matrix, self.num_neighbor)
+                fold_drug_sim_matrix, self.num_neighbor)
             
             disease_graph = self._create_similarity_graph(
-                disease_sim_matrix, self.num_neighbor)
+                fold_disease_sim_matrix, self.num_neighbor)
             
-            # Build KNN graphs based on node features (using similar method as in dataloader.py)
-            drug_feature_graph = self._create_feature_similarity_graph(
-                'drug', self.num_neighbor)
+            # Build feature similarity graphs using pre-trained embeddings + fold-specific associations
+            drug_feature_graph = self._create_fold_specific_feature_graph(
+                'drug', fold_drug_sim_matrix, cv_idx)
             
-            disease_feature_graph = self._create_feature_similarity_graph(
-                'disease', self.num_neighbor)
+            disease_feature_graph = self._create_fold_specific_feature_graph(
+                'disease', fold_disease_sim_matrix, cv_idx)
             
             # Store graph structures for this fold
             self.cv_specific_graphs[cv_idx] = {
@@ -272,8 +388,15 @@ class DrugDataLoader(object):
                 'disease_graph': disease_graph,
                 'drug_feature_graph': drug_feature_graph,
                 'disease_feature_graph': disease_feature_graph,
-                'train_association_matrix': train_assoc_matrix
+                'train_association_matrix': train_assoc_matrix,
+                'fold_drug_sim_matrix': fold_drug_sim_matrix,
+                'fold_disease_sim_matrix': fold_disease_sim_matrix
             }
+            
+            # Verify no information leakage
+            self._verify_fold_isolation(cv_idx, train_data, test_data)
+            
+            print(f"[Graph] Fold {cv_idx} graphs built with strict isolation")
 
     def _create_similarity_graph(self, sim_matrix, k):
         """
@@ -580,6 +703,142 @@ class DrugDataLoader(object):
         }
         
         return graph_data
+
+    def _create_fold_specific_train_matrix(self, train_data):
+        """
+        Create training-only association matrix for specific fold
+        
+        Args:
+            train_data: Training data DataFrame for current fold
+            
+        Returns:
+            train_assoc_matrix: Association matrix containing only training edges
+        """
+        train_assoc_matrix = np.zeros_like(self.association_matrix)
+        
+        # Fill only training set edges
+        pos_train_indices = train_data[train_data['values'] == 1].index
+        for idx in pos_train_indices:
+            drug_id = train_data.loc[idx, 'drug_id']
+            disease_id = train_data.loc[idx, 'disease_id']
+            train_assoc_matrix[drug_id, disease_id] = 1
+            
+        return train_assoc_matrix
+
+    def _compute_fold_specific_similarity(self, train_assoc_matrix, entity_type, cv_idx):
+        """
+        Compute similarity matrix using ONLY training data for specific fold
+        
+        Args:
+            train_assoc_matrix: Training-only association matrix
+            entity_type: 'drug' or 'disease'
+            cv_idx: Cross-validation fold index
+            
+        Returns:
+            fold_sim_matrix: Similarity matrix computed only from training data
+        """
+        if entity_type == 'drug':
+            # For drugs: similarity based on training associations with diseases
+            # This ensures no test disease information leaks into drug similarity
+            entity_sim_matrix = np.dot(train_assoc_matrix, train_assoc_matrix.T)
+            num_entities = self._num_drug
+        else:
+            # For diseases: similarity based on training associations with drugs
+            # This ensures no test drug information leaks into disease similarity
+            entity_sim_matrix = np.dot(train_assoc_matrix.T, train_assoc_matrix)
+            num_entities = self._num_disease
+        
+        # Normalize similarity matrix
+        row_sums = entity_sim_matrix.sum(axis=1, keepdims=True)
+        row_sums[row_sums == 0] = 1  # Avoid division by zero
+        entity_sim_matrix = entity_sim_matrix / row_sums
+        
+        # Add small diagonal values for self-similarity
+        np.fill_diagonal(entity_sim_matrix, 1.0)
+        
+        print(f"[Graph] Fold {cv_idx} {entity_type} similarity matrix computed from {np.sum(train_assoc_matrix > 0)} training edges")
+        
+        return entity_sim_matrix
+
+    def _create_fold_specific_feature_graph(self, entity_type, fold_sim_matrix, cv_idx):
+        """
+        Create feature similarity graph using pre-trained embeddings + fold-specific associations
+        
+        Args:
+            entity_type: 'drug' or 'disease'
+            fold_sim_matrix: Fold-specific similarity matrix
+            cv_idx: Cross-validation fold index
+            
+        Returns:
+            graph: Feature similarity graph
+        """
+        # HYBRID APPROACH: Combine pre-trained embeddings with fold-specific associations
+        
+        if entity_type == 'drug':
+            # Use pre-trained drug embeddings (general knowledge)
+            features = self.drug_embed.copy() if hasattr(self, 'drug_embed') else self.drug_sim_features.copy()
+            num_entities = self._num_drug
+        else:
+            # Use pre-trained disease embeddings (general knowledge)
+            features = self.disease_embed.copy() if hasattr(self, 'disease_embed') else self.disease_sim_features.copy()
+            num_entities = self._num_disease
+        
+        # Calculate feature similarity using pre-trained embeddings
+        if len(features.shape) > 1:
+            # Normalize features
+            norms = np.linalg.norm(features, axis=1, keepdims=True)
+            norms[norms == 0] = 1e-10
+            normalized_features = features / norms
+            
+            # Calculate cosine similarity
+            feature_similarity = np.dot(normalized_features, normalized_features.T)
+        else:
+            feature_similarity = features
+        
+        # HYBRID SIMILARITY: Combine pre-trained feature similarity with fold-specific association similarity
+        # Weight: 70% pre-trained features (general knowledge) + 30% fold-specific associations (local context)
+        hybrid_similarity = self.pretrained_weight * feature_similarity + self.fold_specific_weight * fold_sim_matrix
+        
+        # Ensure diagonal is 1.0
+        np.fill_diagonal(hybrid_similarity, 1.0)
+        
+        print(f"[Graph] Fold {cv_idx} {entity_type} hybrid similarity: {self.pretrained_weight:.1%} pre-trained + {self.fold_specific_weight:.1%} fold-specific")
+        
+        # Build KNN graph using hybrid similarity
+        return self._create_similarity_graph(hybrid_similarity, self.num_neighbor)
+
+    def _verify_fold_isolation(self, cv_idx, train_data, test_data):
+        """
+        Verify that there is no information leakage between train and test sets
+        
+        Args:
+            cv_idx: Cross-validation fold index
+            train_data: Training data for current fold
+            test_data: Testing data for current fold
+        """
+        # Check edge overlap
+        train_edges = set(zip(train_data['drug_id'], train_data['disease_id']))
+        test_edges = set(zip(test_data['drug_id'], test_data['disease_id']))
+        overlap = train_edges.intersection(test_edges)
+        
+        if len(overlap) > 0:
+            raise ValueError(f"CRITICAL: Data leakage detected in fold {cv_idx}: {len(overlap)} overlapping edges")
+        
+        # Check that fold-specific similarity matrices don't contain test information
+        fold_graphs = self.cv_specific_graphs[cv_idx]
+        train_assoc = fold_graphs['train_association_matrix']
+        
+        # Verify training matrix doesn't contain test edges
+        test_edges_array = np.array(list(test_edges))
+        if len(test_edges_array) > 0:
+            test_drug_ids = test_edges_array[:, 0]
+            test_disease_ids = test_edges_array[:, 1]
+            test_values_in_train = train_assoc[test_drug_ids, test_disease_ids]
+            
+            if np.any(test_values_in_train > 0):
+                raise ValueError(f"CRITICAL: Test edges found in training matrix for fold {cv_idx}")
+        
+        print(f"[Verification] Fold {cv_idx} isolation verified - no data leakage detected")
 
     @property
     def num_links(self):

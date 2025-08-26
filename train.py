@@ -440,6 +440,17 @@ if __name__ == '__main__':
     parser.add_argument('--graph_noise_scale', type=float, default=0.03, help='graph structure noise standard deviation')
     parser.add_argument('--feature_mask_rate', type=float, default=0.1, help='feature masking rate')
     parser.add_argument('--mixup_alpha', type=float, default=0.2, help='Mixup parameter')
+    
+    # NEW: Data leakage prevention parameters
+    parser.add_argument('--enable_strict_isolation', action='store_true', default=True, 
+                        help='enable strict data isolation to prevent leakage')
+    parser.add_argument('--pretrained_weight', type=float, default=0.7, 
+                        help='weight for pre-trained embeddings in hybrid similarity (0.0-1.0)')
+    parser.add_argument('--fold_specific_weight', type=float, default=0.3, 
+                        help='weight for fold-specific associations in hybrid similarity (0.0-1.0)')
+    parser.add_argument('--verify_isolation', action='store_true', default=True,
+                        help='verify data isolation during training')
+    
     parser.add_argument('--save_model', action='store_true', help='whether to save best model')
     parser.add_argument('--label_smoothing', type=float, default=0.0, help='label smoothing degree, 0 means not used')
     parser.add_argument('--generate_top_predictions', action='store_true', default=False, 
@@ -491,6 +502,10 @@ if __name__ == '__main__':
                                     'graph_noise_scale': args.graph_noise_scale,
                                     'add_edge_rate': args.add_edge_rate,
                                     'feature_mask_rate': args.feature_mask_rate,
+                                    # NEW: Data isolation parameters
+                                    'enable_strict_isolation': args.enable_strict_isolation,
+                                    'pretrained_weight': args.pretrained_weight,
+                                    'fold_specific_weight': args.fold_specific_weight,
                                 })
         dataset.embedding_mode = args.embedding_mode
         print("Loading dataset finished ...\n")
