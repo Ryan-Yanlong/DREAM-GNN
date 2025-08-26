@@ -350,6 +350,10 @@ def train(args, dataset, cv):
                     model_path = os.path.join(args.save_dir, f"best_model_fold{args.save_id}.pth")
                     th.save(model.state_dict(), model_path)
                     
+                    # NEW: Save drug and disease embeddings for cold start experiments
+                    print(f"[Save] Saving embeddings for cold start experiments...")
+                    save_embeddings_for_cold_start(args, model, dataset, cv)
+                    
     # Training finished, calculate total time
     elapsed_time = time.perf_counter() - start_time
     print("Running time:", time.strftime("%H:%M:%S", time.gmtime(round(elapsed_time))))
@@ -393,6 +397,182 @@ def train(args, dataset, cv):
                 print(f"Rank {i+1}: Drug ID {drug_id} - Disease ID {disease_id}, Score: {row['score']:.4f}")
                 
     return best_auroc, best_aupr
+
+
+def save_embeddings_for_cold_start(args, model, dataset, cv):
+    """
+    Save drug and disease embeddings for cold start experiments
+    
+    Args:
+        args: Training arguments
+        model: Trained model
+        dataset: Dataset instance
+        cv: Cross-validation fold index
+    """
+    try:
+        print(f"[Save] Extracting embeddings for fold {cv}...")
+        
+        # Get fold-specific graph data
+        cv_data = dataset.data_cv[cv]
+        fold_specific_graphs = dataset.cv_specific_graphs[cv]
+        
+        # Extract graph structures needed for embedding extraction
+        drug_graph = fold_specific_graphs['drug_graph'].to(args.device)
+        dis_graph = fold_specific_graphs['disease_graph'].to(args.device)
+        drug_feature_graph = fold_specific_graphs['drug_feature_graph'].to(args.device)
+        disease_feature_graph = fold_specific_graphs['disease_feature_graph'].to(args.device)
+
+        # Get feature data
+        drug_sim_feat = th.FloatTensor(dataset.drug_sim_features).to(args.device)
+        dis_sim_feat = th.FloatTensor(dataset.disease_sim_features).to(args.device)
+        drug_feat = dataset.drug_feature.to(args.device)
+        dis_feat = dataset.disease_feature.to(args.device)
+
+        # Get training data for embedding extraction
+        train_enc_graph = cv_data['train'][0].int().to(args.device)
+        train_dec_graph = cv_data['train'][1].int().to(args.device)
+        
+        # Set model to evaluation mode
+        model.eval()
+        
+        with th.no_grad():
+            # Forward pass to get embeddings
+            pred_ratings, drug_out, drug_sim_out, dis_out, dis_sim_out = model(
+                train_enc_graph, train_dec_graph,
+                drug_graph, drug_sim_feat, drug_feat,
+                dis_graph, dis_sim_feat, dis_feat,
+                drug_feature_graph, disease_feature_graph
+            )
+            
+            # Extract final fused embeddings (Vdrug and Vdisease)
+            # These are the final representations after attention fusion
+            drug_feats = th.stack([drug_out, drug_sim_out], dim=1)
+            drug_feats, att_drug = model.attention(drug_feats)
+            
+            dis_feats = th.stack([dis_out, dis_sim_out], dim=1)
+            dis_feats, att_dis = model.attention(dis_feats)
+            
+            # Get training and testing indices for this fold
+            train_data = dataset.cv_data_dict[cv][0]
+            test_data = dataset.cv_data_dict[cv][1]
+            
+            # Extract training set indices
+            train_drug_indices = train_data['drug_id'].unique()
+            train_disease_indices = train_data['disease_id'].unique()
+            
+            # Convert to numpy if needed
+            if hasattr(train_drug_indices, 'numpy'):
+                train_drug_indices = train_drug_indices.numpy()
+            if hasattr(train_disease_indices, 'numpy'):
+                train_disease_indices = train_disease_indices.numpy()
+            
+            # Get embeddings for training set only
+            Vdrug_train = drug_feats[train_drug_indices]  # Training drug embeddings
+            Vdisease_train = dis_feats[train_disease_indices]  # Training disease embeddings
+            
+            # Get embeddings for all entities (for potential use)
+            Vdrug_all = drug_feats  # All drug embeddings
+            Vdisease_all = dis_feats  # All disease embeddings
+            
+            # Prepare embedding data for saving
+            embeddings_data = {
+                # Training set indices
+                'train_drug_indices': train_drug_indices,
+                'train_disease_indices': train_disease_indices,
+                
+                # Training set embeddings (Vdrug, Vdisease)
+                'drug_feats': Vdrug_train,  # Training drug embeddings
+                'dis_feats': Vdisease_train,  # Training disease embeddings
+                
+                # All embeddings (for reference)
+                'drug_out': drug_out,  # Topology-based drug embeddings
+                'dis_out': dis_out,    # Topology-based disease embeddings
+                'drug_sim_out': drug_sim_out,  # Feature-based drug embeddings
+                'dis_sim_out': dis_sim_out,    # Feature-based disease embeddings
+                
+                # Final fused embeddings
+                'Vdrug': Vdrug_all,      # Final drug embeddings (Vdrug)
+                'Vdisease': Vdisease_all,  # Final disease embeddings (Vdisease)
+                
+                # Attention weights (for analysis)
+                'drug_attention_weights': att_drug,
+                'disease_attention_weights': att_dis,
+                
+                # Metadata
+                'fold': cv,
+                'embedding_dim': drug_feats.shape[-1],
+                'num_train_drugs': len(train_drug_indices),
+                'num_train_diseases': len(train_disease_indices),
+                'num_total_drugs': drug_feats.shape[0],
+                'num_total_diseases': dis_feats.shape[0],
+                'model_config': {
+                    'layers': args.layers,
+                    'gcn_out_units': args.gcn_out_units,
+                    'nhid1': args.nhid1,
+                    'nhid2': args.nhid2,
+                    'dropout': args.dropout,
+                    'attention_dropout': args.attention_dropout
+                }
+            }
+            
+            # Save embeddings
+            embeddings_path = os.path.join(args.save_dir, f"embeddings_fold{args.save_id}.pth")
+            th.save(embeddings_data, embeddings_path)
+            
+            print(f"[Save] ✓ Embeddings saved to {embeddings_path}")
+            print(f"[Save]   Training drugs: {len(train_drug_indices)}")
+            print(f"[Save]   Training diseases: {len(train_disease_indices)}")
+            print(f"[Save]   Embedding dimension: {drug_feats.shape[-1]}")
+            print(f"[Save]   Vdrug shape: {Vdrug_all.shape}")
+            print(f"[Save]   Vdisease shape: {Vdisease_all.shape}")
+            
+            # Save additional metadata for cold start experiments
+            metadata_path = os.path.join(args.save_dir, f"cold_start_metadata_fold{args.save_id}.json")
+            import json
+            
+            metadata = {
+                'fold': cv,
+                'train_drug_indices': train_drug_indices.tolist(),
+                'train_disease_indices': train_disease_indices.tolist(),
+                'test_drug_indices': test_data['drug_id'].unique().tolist(),
+                'test_disease_indices': test_data['disease_id'].unique().tolist(),
+                'embedding_dim': int(drug_feats.shape[-1]),
+                'num_train_drugs': len(train_drug_indices),
+                'num_train_diseases': len(train_disease_indices),
+                'num_test_drugs': len(test_data['drug_id'].unique()),
+                'num_test_diseases': len(test_data['disease_id'].unique()),
+                'model_config': {
+                    'layers': args.layers,
+                    'gcn_out_units': args.gcn_out_units,
+                    'nhid1': args.nhid1,
+                    'nhid2': args.nhid2,
+                    'dropout': args.dropout,
+                    'attention_dropout': args.attention_dropout
+                },
+                'dataset_info': {
+                    'data_name': args.data_name,
+                    'num_neighbor': args.num_neighbor,
+                    'total_drugs': dataset.num_drug,
+                    'total_diseases': dataset.num_disease
+                }
+            }
+            
+            with open(metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
+            print(f"[Save] ✓ Cold start metadata saved to {metadata_path}")
+            
+            # Verify saved embeddings can be loaded
+            print(f"[Save] Verifying saved embeddings...")
+            loaded_data = th.load(embeddings_path, map_location='cpu')
+            print(f"[Save] ✓ Embeddings verification successful")
+            print(f"[Save]   Loaded Vdrug shape: {loaded_data['Vdrug'].shape}")
+            print(f"[Save]   Loaded Vdisease shape: {loaded_data['Vdisease'].shape}")
+            
+    except Exception as e:
+        print(f"[Save] ✗ Error saving embeddings: {str(e)}")
+        import traceback
+        traceback.print_exc()
 
 
 ###############################################################################
