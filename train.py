@@ -11,6 +11,7 @@ from data_loader import DrugDataLoader
 from utils import MetricLogger, common_loss, setup_seed
 from augmentation import augment_graph_data
 import torch.nn.functional as F
+from sklearn.metrics import precision_score, recall_score, f1_score
 
 class LabelSmoothingBCELoss(nn.Module):
     def __init__(self, smoothing=0.0):
@@ -230,6 +231,12 @@ def train(args, dataset, cv):
     best_iter = 0
     best_train_aupr = 0.0
     best_train_auroc = 0.0
+    best_train_precision = 0.0
+    best_train_recall = 0.0
+    best_train_f1 = 0.0
+    best_test_precision = 0.0
+    best_test_recall = 0.0
+    best_test_f1 = 0.0
 
     # Learning rate scheduler - adjust learning rate based on validation performance
     scheduler = th.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'max', patience=500, factor=0.5)
@@ -346,6 +353,33 @@ def train(args, dataset, cv):
                 best_train_auroc = train_auroc
                 best_iter = iter_idx
                 
+                # Compute precision, recall, F1 for train and test at best epoch
+                # Train predictions
+                train_auroc_tmp, train_aupr_tmp, (train_prob, train_true) = evaluate(
+                    args, model, train_data_dict,
+                    drug_graph, drug_feat, drug_sim_feat,
+                    dis_graph, dis_feat, dis_sim_feat,
+                    drug_feature_graph, disease_feature_graph,
+                    return_predictions=True
+                )
+                y_pred_train = (train_prob >= 0.5).astype(int)
+                best_train_precision = precision_score(train_true, y_pred_train, zero_division=0)
+                best_train_recall = recall_score(train_true, y_pred_train, zero_division=0)
+                best_train_f1 = f1_score(train_true, y_pred_train, zero_division=0)
+                
+                # Test predictions
+                test_auroc_tmp, test_aupr_tmp, (test_prob, test_true) = evaluate(
+                    args, model, test_data_dict,
+                    drug_graph, drug_feat, drug_sim_feat,
+                    dis_graph, dis_feat, dis_sim_feat,
+                    drug_feature_graph, disease_feature_graph,
+                    return_predictions=True
+                )
+                y_pred_test = (test_prob >= 0.5).astype(int)
+                best_test_precision = precision_score(test_true, y_pred_test, zero_division=0)
+                best_test_recall = recall_score(test_true, y_pred_test, zero_division=0)
+                best_test_f1 = f1_score(test_true, y_pred_test, zero_division=0)
+                
                 if args.save_model:
                     model_path = os.path.join(args.save_dir, f"best_model_fold{args.save_id}.pth")
                     th.save(model.state_dict(), model_path)
@@ -367,8 +401,10 @@ def train(args, dataset, cv):
     # Save best metrics
     best_metrics_path = os.path.join(args.save_dir, f"best_metric{args.save_id}.csv")
     with open(best_metrics_path, 'w') as f:
-        f.write("iter,train_auroc,train_aupr,test_auroc,test_aupr\n")
-        f.write(f"{best_iter},{best_train_auroc:.4f},{best_train_aupr:.4f},{best_auroc:.4f},{best_aupr:.4f}\n")
+        f.write("iter,train_auroc,train_aupr,train_precision,train_recall,train_f1,test_auroc,test_aupr,test_precision,test_recall,test_f1\n")
+        f.write(
+            f"{best_iter},{best_train_auroc:.4f},{best_train_aupr:.4f},{best_train_precision:.4f},{best_train_recall:.4f},{best_train_f1:.4f},{best_auroc:.4f},{best_aupr:.4f},{best_test_precision:.4f},{best_test_recall:.4f},{best_test_f1:.4f}\n"
+        )
 
     # After training, generate top 200 novel predictions using best model
     if args.save_model and args.generate_top_predictions:

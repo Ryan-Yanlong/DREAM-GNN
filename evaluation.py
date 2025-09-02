@@ -53,23 +53,20 @@ def evaluate(args, model, graph_data,
         )
     
     # Convert predictions and true values to numpy arrays for evaluation
-    y_score = pred_ratings.view(-1).cpu().numpy()
+    # Use sigmoid to obtain probabilities for threshold-based metrics
+    y_prob = th.sigmoid(pred_ratings.view(-1)).cpu().numpy()
     y_true = rating_values.cpu().numpy()
-    
+
     # Calculate ROC curve and AUROC
-    fpr, tpr, _ = metrics.roc_curve(y_true, y_score)
+    fpr, tpr, _ = metrics.roc_curve(y_true, y_prob)
     auc = metrics.auc(fpr, tpr)
-    
+
     # Calculate PR curve and AUPR
-    precision, recall, _ = metrics.precision_recall_curve(y_true, y_score)
+    precision, recall, _ = metrics.precision_recall_curve(y_true, y_prob)
     aupr = metrics.auc(recall, precision)
-    
-    # Calculate other metrics that might be needed (optional but not returned)
-    y_pred = (y_score >= 0.5).astype(int)
-    f1 = metrics.f1_score(y_true, y_pred)
-    acc = metrics.accuracy_score(y_true, y_pred)
-    
+
     if return_predictions:
-        return auc, aupr, (y_score, y_true)
+        # Return probabilities and labels for downstream metric computation
+        return auc, aupr, (y_prob, y_true)
     else:
         return auc, aupr
