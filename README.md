@@ -88,6 +88,8 @@ Input data should be in MATLAB (.mat) format containing:
 - Best metrics: `best_metric{fold_id}.csv`
 - Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
 
+## Cold Start
+
 ## Cite Our Work
 [DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://www.biorxiv.org/content/10.1101/2025.07.07.663530v1)
 
