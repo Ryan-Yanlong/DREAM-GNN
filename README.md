@@ -45,19 +45,6 @@ Run training with default parameters:
 python train.py --data_name lrssl --device 0
 ```
 
-### Key Parameters
-
-- `--data_name`: Dataset name (lrssl, Gdataset, Cdataset)
-- `--device`: GPU device ID (-1 for CPU)
-- `--layers`: Number of GCN layers (default: 3)
-- `--gcn_out_units`: GCN output dimensions (default: 128)
-- `--dropout`: Dropout rate (default: 0.3)
-- `--train_lr`: Learning rate (default: 0.002)
-- `--train_max_iter`: Maximum training iterations (default: 18000)
-- `--use_augmentation`: Enable data augmentation
-- `--save_model`: Save best model
-
-
 ## Model Architecture
 
 1. **GCMC Module**: Processes drug-disease interaction graph with relation-specific transformations
@@ -75,13 +62,6 @@ Input data should be in MATLAB (.mat) format containing:
 - `disease_embed`: Disease feature embeddings
 - `Wrname`: Drug identifiers
 
-## Output
-
-- Model checkpoints: `best_model_fold{fold_id}.pth`
-- Metrics logs: `test_metric{fold_id}.csv`
-- Best metrics: `best_metric{fold_id}.csv`
-- Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
-
 ## Cold Start
 
 ### Overview
@@ -98,11 +78,6 @@ Then run cold start evaluation:
 python cold_start.py
 ```
 
-### Output
-- Comprehensive results with confidence intervals
-- Fold-by-fold performance analysis
-- Statistical significance testing between K values
-- CSV summaries and detailed JSON results
 ## Cite Our Work
 [DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://www.biorxiv.org/content/10.1101/2025.07.07.663530v1)
 
