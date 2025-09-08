@@ -89,7 +89,7 @@ Input data should be in MATLAB (.mat) format containing:
 - Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
 
 ## Cold Start
-
+- cold start: Genralize to new drugs and disease
 ## Cite Our Work
 [DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://www.biorxiv.org/content/10.1101/2025.07.07.663530v1)
 
