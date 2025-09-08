@@ -35,12 +35,6 @@ This project implements a drug-disease association prediction model using Graph 
 - `augmentation.py`: Graph data augmentation techniques
 - `utils.py`: Utility functions for graph processing and logging
 
-## Requirements
-
-- Python 3.7+
-- PyTorch 1.8+
-- DGL (Deep Graph Library)
-
 ## Usage
 
 ### Basic Training
