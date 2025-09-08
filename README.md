@@ -83,7 +83,26 @@ Input data should be in MATLAB (.mat) format containing:
 - Novel predictions: `top{k}_novel_predictions_fold{fold_id}.csv`
 
 ## Cold Start
-- cold start: Genralize to new drugs and disease
+
+### Overview
+The cold start module handles completely unseen drugs and diseases using a retrieval-aggregation framework with disease-conditional attention. It uses raw feature similarity for neighbor selection and trained embeddings for context-aware aggregation to predict associations for entities not seen during training.
+
+### Usage
+First, train models and save embeddings:
+```bash
+python train.py --data_name Gdataset --device 0 --save_model
+```
+
+Then run cold start evaluation:
+```bash
+python cold_start.py
+```
+
+### Output
+- Comprehensive results with confidence intervals
+- Fold-by-fold performance analysis
+- Statistical significance testing between K values
+- CSV summaries and detailed JSON results
 ## Cite Our Work
 [DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://www.biorxiv.org/content/10.1101/2025.07.07.663530v1)
 
