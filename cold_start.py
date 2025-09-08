@@ -1075,7 +1075,7 @@ def main():
         cv_folds=10,
         model_dir='seed_experiments/seed_77',
         unseen_mode='drug',
-        num_test_entities=30
+        num_test_entities=15
     )
     
     # Run optimized disease cold-start experiment  
@@ -1086,7 +1086,7 @@ def main():
         cv_folds=10,
         model_dir='seed_experiments/seed_77',
         unseen_mode='disease',
-        num_test_entities=20
+        num_test_entities=10
     )
     
     # Final summary
