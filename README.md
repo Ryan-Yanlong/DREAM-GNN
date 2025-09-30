@@ -83,6 +83,6 @@ python cold_start.py
 
 ## Timeline
 
-- **Jul 7, 2025** — Preprint released on bioRxiv  
+- **Jul 10, 2025** — Preprint released on bioRxiv  
 - **Sep 29, 2025** — Accepted by *Briefings in Bioinformatics*
 
