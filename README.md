@@ -81,3 +81,8 @@ python cold_start.py
 ## Cite Our Work
 [DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://www.biorxiv.org/content/10.1101/2025.07.07.663530v1)
 
+## Timeline
+
+- **Jul 7, 2025** — Preprint released on bioRxiv  
+- **Sep 29, 2025** — Accepted by *Briefings in Bioinformatics*
+
