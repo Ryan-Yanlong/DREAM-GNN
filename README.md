@@ -1,6 +1,9 @@
 # DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning
 
 ## Overview
+[![Briefings in Bioinformatics](https://img.shields.io/badge/Briefings%20in%20Bioinformatics-Paper-purple)](https://academic.oup.com/bib/article/26/5/bbaf555/8303423)
+[![DOI](https://img.shields.io/badge/DOI-10.xxxx%2Fxxxxx-orange)](https://doi.org/10.1093/bib/bbaf555)
+
 This project implements a drug-disease association prediction model using Graph Convolutional Networks (GCN) with advanced data augmentation techniques. The model predicts novel drug-disease associations by learning from known associations and similarity information. It employs a dual-channel architecture combining:
 - Topology-based Graph Convolutional Matrix Completion (GCMC) layers
 - Feature-based Graph Convolutional Networks (FGCN)
@@ -78,8 +81,7 @@ Then run cold start evaluation:
 python cold_start.py
 ```
 
-## Cite Our Work
-[DREAM-GNN: Dual-route embedding-aware graph neural networks for drug repositioning](https://academic.oup.com/bib/article/26/5/bbaf555/8303423)
+
 
 ## Timeline
 
