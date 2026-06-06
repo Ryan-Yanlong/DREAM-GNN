@@ -65,21 +65,6 @@ Input data should be in MATLAB (.mat) format containing:
 - `disease_embed`: Disease feature embeddings
 - `Wrname`: Drug identifiers
 
-## Cold Start
-
-### Overview
-The cold start module handles completely unseen drugs and diseases using a retrieval-aggregation framework with disease-conditional attention. It uses raw feature similarity for neighbor selection and trained embeddings for context-aware aggregation to predict associations for entities not seen during training.
-
-### Usage
-First, train models and save embeddings:
-```bash
-python train.py --data_name Gdataset --device 0 --save_model
-```
-
-Then run cold start evaluation:
-```bash
-python cold_start.py
-```
 
 
 
