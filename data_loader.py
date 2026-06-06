@@ -247,29 +247,22 @@ class DrugDataLoader(object):
         
         # Check if embeddings are based on the same dataset
         if hasattr(self, 'drug_embed') and hasattr(self, 'disease_embed'):
-            # Calculate correlation between embeddings and association matrix
-            # FIXED: Properly handle dimensions for correlation calculation
             
-            # For drug embeddings: shape (num_drug, 768) vs association matrix (num_drug, num_disease)
-            # We need to reshape to calculate correlation properly
             drug_embed_flat = self.drug_embed.reshape(self._num_drug, -1)  # Flatten to (num_drug, 768)
             assoc_matrix_flat = self.association_matrix.reshape(self._num_drug, -1)  # Flatten to (num_drug, num_disease)
             
-            # Calculate correlation between drug embeddings and association patterns
-            # Use only the drug dimension for correlation
+
             drug_corr = np.corrcoef(drug_embed_flat)[:self._num_drug, :self._num_drug]
             
-            # For disease embeddings: shape (num_disease, 768) vs association matrix (num_drug, num_disease)
-            # Transpose association matrix to get (num_disease, num_drug) for correlation with disease embeddings
+
             disease_embed_flat = self.disease_embed.reshape(self._num_disease, -1)  # Flatten to (num_disease, 768)
             assoc_matrix_T = self.association_matrix.T  # Shape: (num_disease, num_drug)
             assoc_matrix_T_flat = assoc_matrix_T.reshape(self._num_disease, -1)  # Flatten to (num_disease, num_drug)
             
-            # Calculate correlation between disease embeddings and association patterns
+
             disease_corr = np.corrcoef(disease_embed_flat)[:self._num_disease, :self._num_disease]
             
-            # Alternative approach: Calculate correlation between embeddings and association patterns
-            # This gives us a more meaningful measure of whether embeddings "remember" the associations
+
             try:
                 # Calculate how much drug embeddings correlate with their association patterns
                 drug_assoc_corr = []
@@ -789,13 +782,11 @@ class DrugDataLoader(object):
             fold_sim_matrix: Similarity matrix computed only from training data
         """
         if entity_type == 'drug':
-            # For drugs: similarity based on training associations with diseases
-            # This ensures no test disease information leaks into drug similarity
+
             entity_sim_matrix = np.dot(train_assoc_matrix, train_assoc_matrix.T)
             num_entities = self._num_drug
         else:
-            # For diseases: similarity based on training associations with drugs
-            # This ensures no test drug information leaks into disease similarity
+
             entity_sim_matrix = np.dot(train_assoc_matrix.T, train_assoc_matrix)
             num_entities = self._num_disease
         
