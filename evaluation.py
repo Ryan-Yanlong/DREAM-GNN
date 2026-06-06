@@ -5,7 +5,7 @@ def evaluate(args, model, graph_data,
              drug_graph, drug_feat, drug_sim_feat,
              dis_graph, dis_feat, dis_sim_feat,
              drug_feature_graph=None, disease_feature_graph=None,
-             return_predictions=False):
+             pair_feat=None, return_predictions=False):
     """
     Evaluate model performance on given data, ensuring correct graph structures are used for evaluation.
     
@@ -49,7 +49,8 @@ def evaluate(args, model, graph_data,
             enc_graph, dec_graph,
             drug_graph, drug_sim_feat, drug_feat,
             dis_graph, dis_sim_feat, dis_feat,
-            drug_feature_graph, disease_feature_graph
+            drug_feature_graph, disease_feature_graph,
+            pair_feat=pair_feat
         )
     
     # Convert predictions and true values to numpy arrays for evaluation

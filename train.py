@@ -197,12 +197,34 @@ def train(args, dataset, cv):
 
     # Get training and testing data
     train_gt_ratings = cv_data['train'][2].to(args.device)
-    train_enc_graph = cv_data['train'][0].int().to(args.device)
+    # Encoder graph for message passing (TRAIN edges only). Optionally rebalance the heavy
+    # negative:positive ratio by subsampling negatives (enc_neg_ratio:1) -- leakage-free.
+    enc_neg_ratio = getattr(args, 'enc_neg_ratio', 0)
+    if enc_neg_ratio and enc_neg_ratio > 0:
+        train_enc_graph = dataset.build_sparse_enc_graph(
+            cv_data['train'][1].int().to(args.device), train_gt_ratings,
+            ratio=enc_neg_ratio, seed=1024).int().to(args.device)
+    else:
+        train_enc_graph = cv_data['train'][0].int().to(args.device)
     train_dec_graph = cv_data['train'][1].int().to(args.device)
     
+    # Leakage-free guilt-by-association (GBA) pair features for the decoder (only used when
+    # --use_gba). Computed from TRAIN positives + external similarity; index by (drug,disease).
+    gba_keys = [k.strip() for k in getattr(args, 'gba_keys', 'norm_drug,norm_dis').split(',')]
+    args.n_pair = len(gba_keys) if getattr(args, 'use_gba', False) else 0
+    pf_train = pf_test = None
+    if getattr(args, 'use_gba', False):
+        _col = dataset.compute_gba_columns(train_dec_graph, train_gt_ratings)
+        _s, _d = train_dec_graph.edges(etype='rate'); _s, _d = _s.cpu().numpy(), _d.cpu().numpy()
+        _tr = np.stack([_col[k][_s, _d] for k in gba_keys], axis=1).astype(np.float32)
+        _mean, _std = _tr.mean(0), _tr.std(0) + 1e-8
+        _test_dec = cv_data['test'][1].int().to(args.device)
+        pf_train = dataset.gba_pair_feat(train_dec_graph, _col, gba_keys, _mean, _std).to(args.device)
+        pf_test = dataset.gba_pair_feat(_test_dec, _col, gba_keys, _mean, _std).to(args.device)
+
     # Build training and testing data dictionaries (for evaluation)
-    train_data_dict = {'test': cv_data['train']}
-    test_data_dict = {'test': cv_data['test']}
+    train_data_dict = {'test': [train_enc_graph, train_dec_graph, cv_data['train'][2]]}
+    test_data_dict = {'test': [train_enc_graph, cv_data['test'][1], cv_data['test'][2]]}
 
     # Build model, loss function and optimizer
     model = Net(args=args).to(args.device)
@@ -257,38 +279,48 @@ def train(args, dataset, cv):
         model.train()
         Two_Stage = False  # Modify to two-stage training if needed
 
-        # Prepare data to be augmented
-        graph_data_to_augment = {
-            'enc_graph': train_enc_graph,
-            'drug_graph': drug_graph,
-            'disease_graph': dis_graph,
-            'drug_feature_graph': drug_feature_graph,
-            'disease_feature_graph': disease_feature_graph,
-            'drug_feat': drug_feat,
-            'disease_feat': dis_feat,
-            'drug_sim_feat': drug_sim_feat,
-            'disease_sim_feat': dis_sim_feat
-        }
-        
-        # Apply data augmentation
-        augmented_data = augment_graph_data(graph_data_to_augment, aug_methods, aug_params)
-        aug_train_enc_graph = augmented_data['enc_graph']
-        aug_train_dec_graph = train_dec_graph  # Decoder graph not augmented
-        aug_drug_graph = augmented_data['drug_graph']
-        aug_disease_graph = augmented_data['disease_graph']
-        aug_drug_feature_graph = augmented_data['drug_feature_graph']
-        aug_disease_feature_graph = augmented_data['disease_feature_graph']
-        aug_drug_feat = augmented_data['drug_feat']
-        aug_dis_feat = augmented_data['disease_feat']
-        aug_drug_sim_feat = augmented_data['drug_sim_feat']
-        aug_dis_sim_feat = augmented_data['disease_sim_feat']
+
+        aug_train_dec_graph = train_dec_graph  # Decoder graph is never augmented
+        if getattr(args, 'use_augmentation', False):
+            graph_data_to_augment = {
+                'enc_graph': train_enc_graph,
+                'drug_graph': drug_graph,
+                'disease_graph': dis_graph,
+                'drug_feature_graph': drug_feature_graph,
+                'disease_feature_graph': disease_feature_graph,
+                'drug_feat': drug_feat,
+                'disease_feat': dis_feat,
+                'drug_sim_feat': drug_sim_feat,
+                'disease_sim_feat': dis_sim_feat
+            }
+            augmented_data = augment_graph_data(graph_data_to_augment, aug_methods, aug_params)
+            aug_train_enc_graph = augmented_data['enc_graph']
+            aug_drug_graph = augmented_data['drug_graph']
+            aug_disease_graph = augmented_data['disease_graph']
+            aug_drug_feature_graph = augmented_data['drug_feature_graph']
+            aug_disease_feature_graph = augmented_data['disease_feature_graph']
+            aug_drug_feat = augmented_data['drug_feat']
+            aug_dis_feat = augmented_data['disease_feat']
+            aug_drug_sim_feat = augmented_data['drug_sim_feat']
+            aug_dis_sim_feat = augmented_data['disease_sim_feat']
+        else:
+            aug_train_enc_graph = train_enc_graph
+            aug_drug_graph = drug_graph
+            aug_disease_graph = dis_graph
+            aug_drug_feature_graph = drug_feature_graph
+            aug_disease_feature_graph = disease_feature_graph
+            aug_drug_feat = drug_feat
+            aug_dis_feat = dis_feat
+            aug_drug_sim_feat = drug_sim_feat
+            aug_dis_sim_feat = dis_sim_feat
 
         # Forward pass (using augmented data)
         pred_ratings, drug_out, drug_sim_out, dis_out, dis_sim_out = model(
             aug_train_enc_graph, aug_train_dec_graph,
             aug_drug_graph, aug_drug_sim_feat, aug_drug_feat,
             aug_disease_graph, aug_dis_sim_feat, aug_dis_feat,
-            aug_drug_feature_graph, aug_disease_feature_graph, Two_Stage
+            aug_drug_feature_graph, aug_disease_feature_graph, Two_Stage,
+            pair_feat=pf_train
         )
         pred_ratings = pred_ratings.squeeze(-1)
 
@@ -315,7 +347,8 @@ def train(args, dataset, cv):
                     args, model, train_data_dict,
                     drug_graph, drug_feat, drug_sim_feat,
                     dis_graph, dis_feat, dis_sim_feat,
-                    drug_feature_graph, disease_feature_graph
+                    drug_feature_graph, disease_feature_graph,
+                    pair_feat=pf_train
                 )
                 
                 # Evaluate test set performance
@@ -323,7 +356,8 @@ def train(args, dataset, cv):
                     args, model, test_data_dict,
                     drug_graph, drug_feat, drug_sim_feat,
                     dis_graph, dis_feat, dis_sim_feat,
-                    drug_feature_graph, disease_feature_graph
+                    drug_feature_graph, disease_feature_graph,
+                    pair_feat=pf_test
                 )
                 
             # Update learning rate
@@ -360,7 +394,7 @@ def train(args, dataset, cv):
                     drug_graph, drug_feat, drug_sim_feat,
                     dis_graph, dis_feat, dis_sim_feat,
                     drug_feature_graph, disease_feature_graph,
-                    return_predictions=True
+                    pair_feat=pf_train, return_predictions=True
                 )
                 y_pred_train = (train_prob >= 0.5).astype(int)
                 best_train_precision = precision_score(train_true, y_pred_train, zero_division=0)
@@ -373,7 +407,7 @@ def train(args, dataset, cv):
                     drug_graph, drug_feat, drug_sim_feat,
                     dis_graph, dis_feat, dis_sim_feat,
                     drug_feature_graph, disease_feature_graph,
-                    return_predictions=True
+                    pair_feat=pf_test, return_predictions=True
                 )
                 y_pred_test = (test_prob >= 0.5).astype(int)
                 best_test_precision = precision_score(test_true, y_pred_test, zero_division=0)
@@ -384,9 +418,9 @@ def train(args, dataset, cv):
                     model_path = os.path.join(args.save_dir, f"best_model_fold{args.save_id}.pth")
                     th.save(model.state_dict(), model_path)
                     
-                    # NEW: Save drug and disease embeddings for cold start experiments
-                    print(f"[Save] Saving embeddings for cold start experiments...")
-                    save_embeddings_for_cold_start(args, model, dataset, cv)
+                    if not getattr(args, 'use_gba', False):
+                        print(f"[Save] Saving embeddings for cold start experiments...")
+                        save_embeddings_for_cold_start(args, model, dataset, cv)
                     
     # Training finished, calculate total time
     elapsed_time = time.perf_counter() - start_time
@@ -407,7 +441,7 @@ def train(args, dataset, cv):
         )
 
     # After training, generate top 200 novel predictions using best model
-    if args.save_model and args.generate_top_predictions:
+    if args.save_model and args.generate_top_predictions and not getattr(args, 'use_gba', False):
         print("\nGenerating novel predictions using best model...")
         # Load best model
         best_model = Net(args=args).to(args.device)
@@ -612,8 +646,6 @@ def save_embeddings_for_cold_start(args, model, dataset, cv):
 
 
 ###############################################################################
-# Main entry point: parse arguments, use specified random seed list, 
-# load data, perform cross-validation training, etc.
 ###############################################################################
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='DREAM-GNN: Drug REpositioning with Attention Mechanism - Graph Neural Network')
@@ -657,7 +689,6 @@ if __name__ == '__main__':
     parser.add_argument('--feature_mask_rate', type=float, default=0.1, help='feature masking rate')
     parser.add_argument('--mixup_alpha', type=float, default=0.2, help='Mixup parameter')
     
-    # NEW: Data leakage prevention parameters
     parser.add_argument('--enable_strict_isolation', action='store_true', default=True, 
                         help='enable strict data isolation to prevent leakage')
     parser.add_argument('--pretrained_weight', type=float, default=0.7, 
@@ -674,6 +705,15 @@ if __name__ == '__main__':
     parser.add_argument('--top_k', type=int, default=200, 
                         help='number of top predictions to generate')
     
+    parser.add_argument('--fusion', type=str, default='attn', choices=['attn', 'concat'],
+                        help="fuse topology+feature channels by attention ('attn', original) or concat")
+    parser.add_argument('--use_gba', action='store_true', default=False,
+                        help='add leakage-free guilt-by-association pair features to the decoder')
+    parser.add_argument('--gba_keys', type=str, default='norm_drug,norm_dis',
+                        help='comma-separated GBA feature names (see DrugDataLoader.compute_gba_columns)')
+    parser.add_argument('--enc_neg_ratio', type=int, default=0,
+                        help='subsample encoder negatives to ratio:1 (0 = keep all, original ~95:1)')
+
     parser.set_defaults(use_gate_attention=False)
 
     args = parser.parse_args()

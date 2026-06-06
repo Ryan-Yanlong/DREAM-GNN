@@ -5,7 +5,6 @@ Integrated data loader module.
 
 This module loads drug-disease association data, constructs features, splits cross-validation data,
 and builds various graphs based on similarity matrices (e.g., kNN graphs, encoder graphs, decoder graphs).
-Experimental setup: Given all known drugs and diseases, predict new drug-disease associations (transductive link prediction).
 
 Main features:
 1. Uses the same data splitting method as dataloader.py to ensure consistency
@@ -72,7 +71,7 @@ class DrugDataLoader(object):
         self.drug_feature_graph = None
         self.disease_feature_graph = None
         
-        # NEW: Configuration for layered information isolation
+        
         self.pretrained_weight = self.aug_params.get('pretrained_weight', 0.7)  # Weight for pre-trained embeddings
         self.fold_specific_weight = self.aug_params.get('fold_specific_weight', 0.3)  # Weight for fold-specific associations
         self.enable_strict_isolation = self.aug_params.get('enable_strict_isolation', True)  # Enable strict data isolation
@@ -235,7 +234,7 @@ class DrugDataLoader(object):
         print("[Feature] Drug feature shape:", self.drug_feature_shape)
         print("[Feature] Disease feature shape:", self.disease_feature_shape)
         
-        # NEW: Verify pre-trained embeddings don't contain test information
+    
         if self.enable_strict_isolation:
             self._verify_embedding_cleanliness()
 
@@ -337,13 +336,7 @@ class DrugDataLoader(object):
             print("[Verification] No pre-trained embeddings found, using random initialization")
 
     def _generate_cv_specific_graphs(self):
-        """
-        Generate specific graph structures for each cross-validation fold, ensuring no test edge information is included
-        IMPLEMENTATION: Layered Information Isolation Strategy
-        - Layer 1: Pre-trained embeddings (general knowledge, safe to use)
-        - Layer 2: Training-set-specific similarity matrices (strictly isolated)
-        - Layer 3: Cross-validation fold-specific graph structures
-        """
+
         for cv_idx in range(10):
             print(f"[Graph] Building fold {cv_idx} specific graphs with layered isolation...")
             
@@ -630,6 +623,64 @@ class DrugDataLoader(object):
         g = dgl.bipartite_from_scipy(drug_disease_rel_coo, utype='_U', etype='_E', vtype='_V')
         return dgl.heterograph({('drug', 'rate', 'disease'): g.edges()},
                               num_nodes_dict={'drug': self._num_drug, 'disease': self._num_disease})
+
+    def compute_gba_columns(self, train_dec, train_gt):
+        """Leakage-free guilt-by-association (GBA) pair-feature matrices.
+
+        Built ONLY from TRAIN positive associations (A) and the external drug/disease
+        similarity matrices (association-independent), with similarity diagonals zeroed
+        so a pair never sees its own label. Each returned matrix is (num_drug, num_disease);
+        index by (drug, disease) to get the pair feature for that pair.
+        """
+        nd, ns = self._num_drug, self._num_disease
+        s, d = train_dec.edges(etype='rate')
+        rows, cols = s.cpu().numpy(), d.cpu().numpy()
+        vals = train_gt.cpu().numpy()
+        pos = vals == 1
+        A = np.zeros((nd, ns), dtype=np.float64)
+        A[rows[pos], cols[pos]] = 1.0                          # TRAIN positives only
+
+        simD = np.asarray(self.drug_sim_features, dtype=np.float64).copy()
+        simS = np.asarray(self.disease_sim_features, dtype=np.float64).copy()
+        np.fill_diagonal(simD, 0.0)
+        np.fill_diagonal(simS, 0.0)                            # no self-leak
+
+        def _row_norm(M):
+            return M / (M.sum(1, keepdims=True) + 1e-8)
+
+        col = {}
+        col['norm_drug'] = _row_norm(simD) @ A                 # d looks like drugs that (in train) treat i
+        col['norm_dis'] = A @ _row_norm(simS).T                # i looks like diseases d (in train) treats
+        col['raw_drug'] = simD @ A
+        col['raw_dis'] = A @ simS.T
+        col['prod'] = col['norm_drug'] * col['norm_dis']
+        return col
+
+    @staticmethod
+    def gba_pair_feat(dec_graph, col, keys, mean, std):
+        """Build the [num_edges, len(keys)] GBA feature tensor aligned with dec_graph edges."""
+        s, d = dec_graph.edges(etype='rate')
+        s, d = s.cpu().numpy(), d.cpu().numpy()
+        f = np.stack([col[k][s, d] for k in keys], axis=1).astype(np.float32)
+        return th.FloatTensor((f - mean) / std)
+
+    def build_sparse_enc_graph(self, train_dec, train_gt, ratio=1, seed=42, add_support=True):
+        """Encoder graph from TRAIN edges with negative subsampling (ratio:1 neg:pos).
+
+        ratio=None keeps all edges (original ~95:1 imbalance); ratio=1 rebalances to 1:1.
+        Leakage-free (built from training edges only).
+        """
+        s, d = train_dec.edges(etype='rate')
+        rows, cols = s.cpu().numpy(), d.cpu().numpy()
+        vals = train_gt.cpu().numpy()
+        pos = np.where(vals == 1)[0]
+        neg = np.where(vals == 0)[0]
+        if ratio is None:
+            idx = np.arange(len(rows))
+        else:
+            rng = np.random.RandomState(seed)
+            idx = np.concatenate([pos, rng.choice(neg, size=min(len(neg), int(ratio * len(pos))), replace=False)])
+        return self._generate_enc_graph((rows[idx], cols[idx]), vals[idx], add_support=add_support)
 
     def augment_features(self):
         """

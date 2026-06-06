@@ -24,69 +24,51 @@ class GraphAugmentation:
         if not isinstance(graph, dgl.DGLGraph):
             return graph
             
-        # Create a new heterogeneous graph, preserving original structure but only keeping edges we want
-        data_dict = {}
-        num_nodes_dict = {ntype: graph.number_of_nodes(ntype) for ntype in graph.ntypes}
-        
-        # Determine device of the graph
+        # Rebuild the graph keeping a random subset of edges. Build everything on CPU and move
+        # back to the original device at the end: DGL 0.7.x GPU graph construction / degree
+        # queries can raise cudaErrorIllegalAddress. The encoder graph only carries 'ci'/'cj'
+        # node data and no edge data, so nothing else needs copying.
         device = graph.device
-        
-        # Process each edge type
+        num_nodes_dict = {ntype: graph.number_of_nodes(ntype) for ntype in graph.ntypes}
+
+        data_dict = {}
         for etype in graph.canonical_etypes:
-            src_ntype, rel_type, dst_ntype = etype
-            
-            # Get number of edges for this type
             num_edges = graph.number_of_edges(etype)
-            
             if num_edges == 0:
-                # If no edges, add an empty edge list
-                data_dict[etype] = (th.tensor([], dtype=th.int64, device=device), 
-                                   th.tensor([], dtype=th.int64, device=device))
+                data_dict[etype] = (th.tensor([], dtype=th.int64), th.tensor([], dtype=th.int64))
                 continue
-            
-            # Calculate number of edges to keep
-            num_keep = max(1, int(num_edges * (1 - dropout_rate)))  # Keep at least one edge
-            
-            # Randomly select edges to keep
-            perm = th.randperm(num_edges, device=device)
-            edges_to_keep = perm[:num_keep]
-            
-            # Get all source and destination nodes
+            num_keep = max(1, int(num_edges * (1 - dropout_rate)))  # keep at least one edge
+            perm = th.randperm(num_edges)[:num_keep]
             src, dst = graph.edges(etype=etype)
-            
-            # Select edges to keep
-            src_keep = src[edges_to_keep]
-            dst_keep = dst[edges_to_keep]
-            
-            # Add kept edges to new data dictionary
-            data_dict[etype] = (src_keep, dst_keep)
-        
-        # Create new heterogeneous graph
+            data_dict[etype] = (src.cpu()[perm], dst.cpu()[perm])
+
         new_graph = dgl.heterograph(data_dict, num_nodes_dict=num_nodes_dict)
-        
-        # Copy node features
-        for ntype in graph.ntypes:
-            for key, feat in graph.nodes[ntype].data.items():
-                new_graph.nodes[ntype].data[key] = feat.clone()
-        
-        # Copy edge features (if any)
-        for etype in graph.canonical_etypes:
-            if new_graph.number_of_edges(etype) > 0:
-                for key, feat in graph.edges[etype].data.items():
-                    # Select corresponding edge features using indices
-                    src_type, rel_type, dst_type = etype
-                    if graph.number_of_edges(etype) == new_graph.number_of_edges(etype):
-                        # If edge count is the same, copy directly
-                        new_graph.edges[etype].data[key] = feat.clone()
-                    else:
-                        # Otherwise, need to select corresponding features
-                        try:
-                            indices = perm[:num_keep]  # Use previously selected edge indices
-                            new_graph.edges[etype].data[key] = feat[indices].clone()
-                        except Exception as e:
-                            print(f"Warning: Could not copy edge feature {key} for edge type {etype}: {e}")
-        
-        return new_graph
+
+        # Recompute GCMC degree-normalization support 'ci'/'cj' from the NEW (dropped-edge)
+        # degrees instead of copying the stale originals (B2 fix). Symmetric normalization,
+        # matching data_loader._generate_enc_graph (gcn_agg_norm_symm=True, the default).
+        has_support = any(('ci' in graph.nodes[nt].data) or ('cj' in graph.nodes[nt].data)
+                          for nt in graph.ntypes)
+        if has_support:
+            def _calc_norm(deg):
+                deg = deg.float().clone()
+                deg[deg == 0] = float('inf')          # isolated node -> 1/sqrt(inf) = 0
+                return (1.0 / th.sqrt(deg)).unsqueeze(1)
+
+            for ntype in new_graph.ntypes:
+                n = new_graph.number_of_nodes(ntype)
+                in_deg = th.zeros(n)
+                out_deg = th.zeros(n)
+                for cet in new_graph.canonical_etypes:
+                    s, _, d = cet
+                    if d == ntype:
+                        in_deg = in_deg + new_graph.in_degrees(etype=cet)
+                    if s == ntype:
+                        out_deg = out_deg + new_graph.out_degrees(etype=cet)
+                new_graph.nodes[ntype].data['ci'] = _calc_norm(in_deg)   # dst-side norm
+                new_graph.nodes[ntype].data['cj'] = _calc_norm(out_deg)  # src-side norm
+
+        return new_graph.to(device)
 
     @staticmethod
     def random_edge_dropout_sparse(sparse_graph, dropout_rate=0.1):

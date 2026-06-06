@@ -45,23 +45,27 @@ class Net(nn.Module):
                          args.nhid2,
                          args.dropout)
         
-        # Add a new argument to control whether to use gated attention fusion.
-        if False:
-            self.gatedfusion = GatedMultimodalLayer(args.gcn_out_units,
-                                                    args.gcn_out_units,
-                                                    args.gcn_out_units)
+        self.attention = Attention(args.gcn_out_units, dropout_rate=args.attention_dropout)
+
+        # Fusion of topology (TGCN) and feature (FGCN) channels:
+        #   'attn'   -> attention convex-combination (original, decoder input = gcn_out_units)
+        #   'concat' -> keep both channels (decoder input = 2 * gcn_out_units)
+        self.fusion = getattr(args, 'fusion', 'attn')
+        dec_in = args.gcn_out_units if self.fusion == 'attn' else 2 * args.gcn_out_units
+
+        # Decoder: plain MLP, or GBA decoder that also consumes leakage-free pair features.
+        self.use_gba = getattr(args, 'use_gba', False)
+        if self.use_gba:
+            self.decoder = GBADecoder(dec_in, n_pair=getattr(args, 'n_pair', 2), dropout_rate=args.dropout)
         else:
-            # Modify Attention class input dimension (topology features + similarity graph features + feature similarity graph features)
-            self.attention = Attention(args.gcn_out_units, dropout_rate=args.attention_dropout)
-        
-        self.decoder = MLPDecoder(in_units=args.gcn_out_units, dropout_rate=args.dropout)
+            self.decoder = MLPDecoder(in_units=dec_in, dropout_rate=args.dropout)
         self.rating_vals = args.rating_vals
 
     def forward(self, enc_graph, dec_graph,
                 drug_graph, drug_sim_feat, drug_feat,
                 dis_graph, disease_sim_feat, dis_feat,
                 drug_feature_graph=None, disease_feature_graph=None,
-                Two_Stage=False):
+                Two_Stage=False, pair_feat=None):
 
         # Topology convolution operation
         for i in range(0, self.layers):
@@ -82,22 +86,21 @@ class Net(nn.Module):
             drug_feature_graph, disease_feature_graph
         )
         
-        # Modified fusion method to handle multiple graph embeddings
-        if False:
-            # If gated attention is enabled, fuse topology embeddings and multi-graph feature embeddings
-            drug_feats = self.gatedfusion(drug_out, drug_sim_out)
-            dis_feats = self.gatedfusion(dis_out, dis_sim_out)
+        # Fuse topology (TGCN) and feature (FGCN) channels
+        if self.fusion == 'concat':
+            # keep both channels; decoder input width is 2 * gcn_out_units
+            drug_feats = th.cat([drug_out, drug_sim_out], dim=1)
+            dis_feats = th.cat([dis_out, dis_sim_out], dim=1)
         else:
-            # Otherwise use stacking + attention to fuse
-            # Can choose to include all individual embeddings, or only the final fused embeddings
-            drug_feats = th.stack([drug_out, drug_sim_out], dim=1)
-            drug_feats, att_drug = self.attention(drug_feats)
-
-            dis_feats = th.stack([dis_out, dis_sim_out], dim=1)
-            dis_feats, att_dis = self.attention(dis_feats)
+            # attention convex-combination (original)
+            drug_feats, att_drug = self.attention(th.stack([drug_out, drug_sim_out], dim=1))
+            dis_feats, att_dis = self.attention(th.stack([dis_out, dis_sim_out], dim=1))
         
-        # Decode
-        pred_ratings = self.decoder(dec_graph, drug_feats, dis_feats)
+        # Decode (GBA decoder also consumes leakage-free pair features)
+        if self.use_gba:
+            pred_ratings = self.decoder(dec_graph, drug_feats, dis_feats, pair_feat)
+        else:
+            pred_ratings = self.decoder(dec_graph, drug_feats, dis_feats)
         
         # Return all intermediate representations for supervision or analysis
         return pred_ratings, drug_out, drug_sim_out, dis_out, dis_sim_out

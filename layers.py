@@ -379,6 +379,45 @@ def udf_u_mul_e(edges):
     return {'m': th.cat([edges.src['h'], edges.dst['h']], 1)}
 
 
+def udf_gba(edges):
+    # concat src/dst node embeddings with the (leakage-free) GBA pair features
+    return {'m': th.cat([edges.src['h'], edges.dst['h'], edges.data['gba']], dim=1)}
+
+
+class GBADecoder(nn.Module):
+    """MLP decoder that concatenates leakage-free guilt-by-association (GBA) pair
+    features at the input (only architectural change vs MLPDecoder: lin1 width).
+
+    pair_feat: [num_edges, n_pair] tensor aligned with graph.edges(etype='rate').
+    """
+    def __init__(self, in_units, n_pair, dropout_rate=0.1):
+        super(GBADecoder, self).__init__()
+        self.dropout = nn.Dropout(dropout_rate)
+        self.lin1 = nn.Linear(2 * in_units + n_pair, 128)
+        self.lin2 = nn.Linear(128, 64)
+        self.lin3 = nn.Linear(64, 1)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.lin1.reset_parameters()
+        self.lin2.reset_parameters()
+        self.lin3.reset_parameters()
+
+    def forward(self, graph, drug_feat, dis_feat, pair_feat):
+        with graph.local_scope():
+            graph.nodes['drug'].data['h'] = drug_feat
+            graph.nodes['disease'].data['h'] = dis_feat
+            graph.edata['gba'] = pair_feat
+            graph.apply_edges(udf_gba)
+            out = graph.edata['m']
+            out = F.relu(self.lin1(out))
+            out = self.dropout(out)
+            out = F.relu(self.lin2(out))
+            out = self.dropout(out)
+            out = self.lin3(out)
+        return out
+
+
 def dot_or_identity(A, B, device=None):
     if A is None:
         return B
